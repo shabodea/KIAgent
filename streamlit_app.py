@@ -21,13 +21,13 @@ st.markdown("""
 st.title("🦅 KI-BROKER EVALUATIONS-ZENTRALE")
 st.caption("Institutionelles Handelsmodell — Mathematische Echtzeit-Überwachung")
 
-# --- DATEN QUERIES (CACHE DEAKTIVIERT FÜR ECHTZEIT-CHAT) ---
+# --- DATEN QUERIES ---
 def get_all_data_live():
     try:
-        # Wir hängen einen zufälligen Zeitstempel an, um jeglichen Cache im Browser zu umgehen
         timestamp = int(datetime.utcnow().timestamp())
         t = requests.get(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=*&_ts={timestamp}", headers=HEADERS).json()
-        c = requests.get(f"{SUPABASE_URL}/rest/v1/Chatnachrichten?select=*&_ts={timestamp}", headers=HEADERS).json()
+        # FIX: Geändert von Chatnachrichten auf chat_messages
+        c = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages?select=*&_ts={timestamp}", headers=HEADERS).json()
         r = requests.get(f"{SUPABASE_URL}/rest/v1/Risiko_Log?select=*&_ts={timestamp}", headers=HEADERS).json()
         return t, c, r
     except Exception as e:
@@ -108,38 +108,37 @@ with col_right:
     st.subheader("💬 Taktischer Live-Diskurs")
     chat_container = st.container(height=450)
     with chat_container:
-        # Wenn echte Chatdaten da sind, listen wir sie sauber auf
         if isinstance(chat, list) and len(chat) > 0 and isinstance(chat[0], dict):
-            for msg in sorted(chat, key=lambda x: x.get('Ausweis', 0) if isinstance(x, dict) else 0):
+            # FIX: Sortierung angepasst von 'Ausweis' auf 'id'
+            for msg in sorted(chat, key=lambda x: x.get('id', 0) if isinstance(x, dict) else 0):
                 with st.chat_message(msg.get("role", "user")):
                     st.write(msg.get("content", ""))
         else:
-            st.info("Noch keine Nachrichten in der Datenbank gefunden.")
+            st.info("Noch keine Nachrichten im Verlauf. Schreibe deine erste Anweisung!")
 
 st.markdown("---")
 
-# --- STRATEGISCHE BEFEHLSZEILE (MIT LIVE-DEBUGGER) ---
+# --- STRATEGISCHE BEFEHLSZEILE ---
 st.subheader("⌨️ Taktische Befehlszeile")
 if prompt := st.chat_input("Gib dem Broker eine Anweisung oder frage nach Markt-Sentiment..."):
-    # POST-Request absetzen und Antwort prüfen
     try:
+        # FIX: Geändert von Chatnachrichten auf chat_messages
         response = requests.post(
-            f"{SUPABASE_URL}/rest/v1/Chatnachrichten", 
+            f"{SUPABASE_URL}/rest/v1/chat_messages", 
             headers=HEADERS, 
             json={"role": "user", "content": prompt}
         )
         
-        # LIVE-DEBUGGER: Zeigt an, was die Datenbank meldet
-        if response.status_code == 201 or response.status_code == 200:
-            st.success(f"Erfolgreich gesendet! (Status: {response.status_code})")
+        if response.status_code in [200, 201]:
+            st.success("Gesendet!")
             st.rerun()
         else:
-            st.error(f"Datenbank lehnt Nachricht ab: Code {response.status_code} - {response.text}")
+            st.error(f"Datenbank-Fehler: Code {response.status_code} - {response.text}")
             
     except Exception as e:
         st.error(f"Netzwerk-Fehler beim Senden: {str(e)}")
 
-# --- SIDEBAR: REALE SYSTEM-EVOLUTION ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("🧠 KI-Gedächtnis (Dauerspeicher)")
     try:
