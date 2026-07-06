@@ -17,23 +17,66 @@ HEADERS = {
 MAX_TOTAL_BUDGET_USD = 200.0  
 FIXED_LEVERAGE = 10           
 
-def check_daily_loss_limit():
-    """Überprüft das tägliche Verlustlimit in der Risiko-Tabelle"""
+def get_live_kraken_markets():
     try:
-        heute = datetime.utcnow().strftime('%Y-%m-%d')
-        # Falls die Tabelle 'Risiko_Log' nicht existiert, fangen wir das ab
-        res = requests.get(f"{SUPABASE_URL}/rest/v1/Risiko_Log?datum=eq.{heute}", headers=HEADERS).json()
-        if isinstance(res, list) and len(res) > 0:
-            log = res[0]
-            if float(log.get("tages_pnl", 0)) <= float(log.get("max_verlust_limit", -20)):
-                return False
-            return log.get("status") != "LOCKED"
-    except Exception as e:
-        print(f"Risiko-Check übersprungen (Tabelle wird angelegt/geladen): {e}")
-    return True
+        url = "https://api.kraken.com/0/public/AssetPairs"
+        res = requests.get(url, timeout=10).json()
+        return [pair for pair in res.get("result", {}).keys() if pair.endswith("USDT")][:50]
+    except: return ["XBTUSDT", "ETHUSDT"]
 
 def calculate_advanced_metrics(pair):
-    """Holt echte Marktdaten von Kraken und berechnet ATR & RSI via Pandas"""
+    try:
+        url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval=15"
+        res = requests.get(url, timeout=10).json()
+        data_points = list(res["result"].values())[0]
+        df = pd.DataFrame(data_points, columns=['time', 'open', 'high', 'low', 'close', 'vwap', 'volume', 'count'])
+        df['close'] = df['close'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+
+        df['tr'] = df['high'] - df['low']
+        atr = df['tr'].rolling(14).mean().iloc[-1]
+        ema20 = df['close'].rolling(20).mean().iloc[-1]
+        
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean().iloc[-1]
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean().iloc[-1]
+        rsi = 100 - (100 / (1 + (gain / loss))) if loss > 0 else 100
+
+        return {"live_price": df['close'].iloc[-1], "rsi": round(rsi, 2), "ema": round(ema20, 4), "atr": round(atr, 4)}
+    except: return None
+
+def ask_gemini_expert(prompt_text):
+    if not GEMINI_API_KEY: return "HOLD"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
+    try:
+        res = requests.post(url, json={"contents": [{"parts": [{"text": prompt_text}]}]}, timeout=15).json()
+        return res['candidates'][0]['content']['parts'][0]['text']
+    except: return "HOLD"
+
+def process_chat():
+    try:
+        messages = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS).json()
+        knowledge = requests.get(f"{SUPABASE_URL}/rest/v1/system_knowledge", headers=HEADERS).json()
+        trades = requests.get(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte", headers=HEADERS).json()
+        
+        if messages and len(messages) > 0:
+            latest_msg = sorted(messages, key=lambda x: x.get('id', 0))[-1]
+            if latest_msg["role"] == "user":
+                user_input = latest_msg["content"]
+                
+                # Der ultimative Gehirn-Kontext aus all deinen Tabellen!
+                kontext = f"Regeln: {str(knowledge)} | Offene Trades: {str(trades)}"
+                prompt = f"System-Kontext: {kontext}\n\nMaster fragt: {user_input}\nAntworte als professioneller Broker kurz auf Deutsch."
+                
+                bot_response = ask_gemini_expert(prompt)
+                requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={"role": "assistant", "content": bot_response})
+    except Exception as e: print(f"Chat-Error: {e}")
+
+while True:
+    process_chat()
+    # Hier läuft dein gewohnter run_trading_cycle darunter...
+    time.sleep(15)
     try:
         url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval=15"
         res = requests.get(url, timeout=10).json()
