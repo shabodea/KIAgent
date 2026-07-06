@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-import math
+from datetime import datetime
 
 # Schlüssel und Cloud-Datenbank-Konfiguration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -14,9 +14,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-KRAKEN_TAKER_FEE = 0.0026  # 0.26%
-
-# Parameter des Masters
+KRAKEN_TAKER_FEE = 0.0026
 MAX_TOTAL_BUDGET_USD = 200.0  
 POSITION_SIZE_USD = 50.0      
 FIXED_LEVERAGE = 10           
@@ -31,15 +29,100 @@ def get_live_kraken_markets():
         return ["XBTUSDT", "ETHUSDT", "SOLUSDT"]
 
 def get_current_used_budget():
-    """Zählt das Budget NUR von den echten, aktuell laufenden Positionen"""
     try:
-        url = f"{SUPABASE_URL}/rest/v1/trade_history?status=eq.ACTIVE"
+        url = f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?Status=eq.ACTIVE"
         res = requests.get(url, headers=HEADERS).json()
         if isinstance(res, list):
-            return sum(float(trade.get("margin_usd", 0)) for trade in res if "leverage" in trade)
+            return sum(float(trade.get("Marge in USD", 0)) for trade in res if "Hebelwirkung" in trade)
         return 0.0
     except:
         return 999.0
+
+def is_bot_paused():
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/bot_memory"
+        res = requests.get(url, headers=HEADERS).json()
+        if res and isinstance(res, list):
+            memory = res[0]
+            paused_until = memory.get("paused_until")
+            if paused_until:
+                until_time = datetime.fromisoformat(paused_until.replace("Z", "+00:00"))
+                if datetime.utcnow().timestamp() < until_time.timestamp():
+                    return True
+        return False
+    except:
+        return False
+
+def check_and_close_trades():
+    """
+    Überwachungs-Maschine angepasst an deine exakten Supabase-Spaltennamen.
+    Berechnet PnL mit 10x Hebel und fordert im Chat Feedback, falls ein Fehler auftritt.
+    """
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?Status=eq.ACTIVE"
+        active_trades = requests.get(url, headers=HEADERS).json()
+        if not isinstance(active_trades, list) or len(active_trades) == 0: return
+
+        for trade in active_trades:
+            if "Vermögenswert" not in trade or not trade["Vermögenswert"]: continue
+            pair = trade["Vermögenswert"]
+            trade_id = trade.get("Ausweis")
+            
+            # Live-Kurs von Kraken holen
+            url_ticker = f"https://api.kraken.com/0/public/Ticker?pair={pair}"
+            res = requests.get(url_ticker, timeout=10).json()
+            if "result" not in res: continue
+            ticker_data = list(res["result"].values())[0]
+            current_price = (float(ticker_data["b"][0]) + float(ticker_data["a"][0])) / 2
+            
+            entry = float(trade.get("Eintrittspreis", current_price))
+            sl = entry * 0.985  # 1.5% Stop-Loss
+            tp = entry * 1.03   # 3.0% Take-Profit
+            
+            closed = False
+            reason = ""
+            
+            if current_price <= sl:
+                closed = True
+                reason = "STOP-LOSS"
+            elif current_price >= tp:
+                closed = True
+                reason = "TAKE-PROFIT"
+                
+            if closed:
+                # Exakte Hebel-Gewinnberechnung (LONG)
+                price_change_p = (current_price - entry) / entry
+                realized_pnl = POSITION_SIZE_USD * price_change_p * FIXED_LEVERAGE
+                fees = float(trade.get("Gebühren_USD", 0))
+                final_pnl = round(realized_pnl - fees, 4)
+
+                # Update exakt in deine deutschen Tabellenspalten schießen!
+                requests.patch(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?Ausweis=eq.{trade_id}", headers=HEADERS, json={
+                    "Status": "CLOSED",
+                    "Ausstiegspreis": current_price,
+                    "net_pnl": final_pnl,
+                    "Begründung": f"🔴 Geschlossen bei {round(current_price, 4)} via {reason}. Netto: {final_pnl}$"
+                })
+                
+                # Feedback-Schleife triggern bei Verlust
+                if final_pnl < 0:
+                    feedback_prompt = (
+                        f"Ein Trade für {pair} wurde im Stop-Loss beendet (Verlust: {final_pnl}$).\n"
+                        f"Einstieg: {entry} | Ausstieg: {current_price}.\n"
+                        "Schreibe eine kurze, direkte Nachricht an den Master auf Deutsch. "
+                        "Erkläre präzise, welche Marktdaten dir fehlen (z.B. RSI, MACD oder gleitende Durchschnitte) "
+                        "oder welche strategische Code-Erweiterung du von ihm brauchst, um dich weiter zu verbessern."
+                    )
+                    assistant_demand = ask_gemini_expert(feedback_prompt)
+                    
+                    requests.post(f"{SUPABASE_URL}/rest/v1/Chatnachrichten", headers=HEADERS, json={
+                        "role": "assistant",
+                        "content": f"⚠️ **BOT-REFLXION NACH VERLUST:**\n\n{assistant_demand}\n\n*LEKTION: Meister, wir müssen den Code erweitern, um diesen Fehler künftig zu vermeiden.*"
+                    })
+
+                print(f"🔴 Position geschlossen: {pair} | Net-PnL: {final_pnl}$")
+    except Exception as e:
+        print(f"Fehler bei Trade-Überwachung: {e}")
 
 def get_orderbook_and_atr(pair):
     try:
@@ -65,104 +148,32 @@ def get_orderbook_and_atr(pair):
     except:
         return None
 
-def check_and_close_trades():
-    """
-    NEU: Die Schließungs-Maschine.
-    Prüft alle offenen Trades gegen den aktuellen Live-Preis auf Kraken.
-    """
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/trade_history?status=eq.ACTIVE"
-        active_trades = requests.get(url, headers=HEADERS).json()
-        
-        if not isinstance(active_trades, list) or len(active_trades) == 0:
-            return
-
-        print(f"🔄 Überwache {len(active_trades)} offene Positionen live...")
-        
-        for trade in active_trades:
-            # Wir überspringen alte fehlerhafte Log-Einträge in der Tabelle
-            if "asset" not in trade or not trade["asset"]:
-                continue
-                
-            pair = trade["asset"]
-            trade_id = trade.get("id")
-            
-            # Hole aktuellen Live-Preis von Kraken für diesen Coin
-            url_ticker = f"https://api.kraken.com/0/public/Ticker?pair={pair}"
-            res = requests.get(url_ticker, timeout=10).json()
-            if "result" not in res: continue
-            ticker_data = list(res["result"].values())[0]
-            current_price = (float(ticker_data["b"][0]) + float(ticker_data["a"][0])) / 2
-            
-            # Versuche rationale Texte nach den berechneten SL/TP Werten zu parsen
-            # Falls keine festen Spalten existieren, nutzen wir solide mathematische Abstände (1.5% Risikospanne)
-            entry = float(trade.get("entry_price", current_price))
-            sl = entry * 0.985  # 1.5% Stop-Loss standardmäßig
-            tp = entry * 1.03   # 3.0% Take-Profit
-            
-            # Prüfe Schließungs-Bedingung
-            closed = False
-            reason = ""
-            
-            if current_price <= sl:
-                closed = True
-                reason = "STOP-LOSS ERREICHT (Risiko-Schutz)"
-            elif current_price >= tp:
-                closed = True
-                reason = "TAKE-PROFIT ERREICHT (Gewinn gesichert)"
-                
-            if closed:
-                # Update in Supabase: Setze Status auf CLOSED
-                requests.patch(f"{SUPABASE_URL}/rest/v1/trade_history?id=eq.{trade_id}", headers=HEADERS, json={
-                    "status": "CLOSED",
-                    "rationale": f"🔴 Geschlossen: {reason} bei {round(current_price, 4)}"
-                })
-                # Logbucheintrag schreiben
-                requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json={
-                    "role": "assistant",
-                    "content": f"🎯 Trade beendet für {pair}. Grund: {reason}."
-                })
-                print(f"🔴 Position erfolgreich geschlossen: {pair} wegen {reason}")
-    except Exception as e:
-        print(f"Fehler bei Trade-Überwachung: {e}")
-
 def get_advanced_metrics(asset_ticker):
     try:
         ticker = asset_ticker.replace("USDT", "").lower()
         if ticker == "xbt": ticker = "btc"
         search_res = requests.get(f"https://api.coingecko.com/api/v3/search?query={ticker}", timeout=10).json()
-        if not search_res.get("coins"): return {"inflation_risk": "Low", "open_interest_trend": "Stable", "tokens_to_release": 0, "released_p": 100}
+        if not search_res.get("coins"): return {"inflation_risk": "Low", "released_p": 100}
         coin_id = search_res["coins"][0]["id"]
         coin_data = requests.get(f"https://api.coingecko.com/api/v3/coins/{coin_id}", timeout=10).json()
         market_data = coin_data.get("market_data", {})
         circulating = market_data.get("circulating_supply", 0)
         total_max = market_data.get("max_supply") or market_data.get("total_supply") or circulating
         released_percentage = (circulating / total_max) * 100 if total_max > 0 else 100
-        tokens_to_release = total_max - circulating
-        return {"released_p": round(released_percentage, 2), "tokens_to_release": round(tokens_to_release, 2), "inflation_risk": "LOW" if released_percentage > 50 else "HIGH", "open_interest_trend": "STABLE"}
+        return {"released_p": round(released_percentage, 2), "inflation_risk": "LOW" if released_percentage > 50 else "HIGH"}
     except:
-        return {"released_p": 100.0, "tokens_to_release": 0, "inflation_risk": "Low", "open_interest_trend": "Stable"}
-
-def ask_gemini_expert(prompt_text):
-    if not GEMINI_API_KEY: return "⚠️ Key fehlt"
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY.strip()}"
-    try:
-        response = requests.post(url, json={"contents": [{"parts": [{"text": prompt_text}]}]}, timeout=15)
-        return response.json()['candidates'][0]['content']['parts'][0]['text']
-    except: return "HOLD"
+        return {"released_p": 100.0, "inflation_risk": "Low"}
 
 def run_unlimited_expert_trading():
     try:
+        if is_bot_paused(): return
         current_allocated = get_current_used_budget()
-        print(f"💰 Risiko-Watch: {current_allocated}$ von {MAX_TOTAL_BUDGET_USD}$ belegt.")
         if current_allocated >= MAX_TOTAL_BUDGET_USD: return
 
-        mem_res = requests.get(f"{SUPABASE_URL}/rest/v1/bot_memory", headers=HEADERS).json()
-        learned_context = ", ".join(mem_res[0].get("learned_lessons", [])) if mem_res else ""
         all_pairs = get_live_kraken_markets()
 
         for pair in all_pairs[:15]:
-            if get_current_used_budget() >= MAX_TOTAL_BUDGET_USD: break
+            if is_bot_paused() or get_current_used_budget() >= MAX_TOTAL_BUDGET_USD: break
             market_stats = get_orderbook_and_atr(pair)
             if not market_stats: continue
                 
@@ -173,44 +184,52 @@ def run_unlimited_expert_trading():
                 price = market_stats["live_price"]
                 exact_fees = POSITION_SIZE_USD * KRAKEN_TAKER_FEE * 2
                 
-                expert_prompt = f"Du bist der {FIXED_LEVERAGE}x Krypto-Experte. Gedächtnis: {learned_context}. Signal für {pair} bei {price}. Lohnt sich ein Long-Trade? Antworte mit 'GO: Begründung' oder 'HOLD'."
+                expert_prompt = f"Du bist der {FIXED_LEVERAGE}x Krypto-Experte. Signal für {pair} bei {price}. Lohnt sich ein Long-Trade? Antworte mit 'GO: Begründung' oder 'HOLD'."
                 decision = ask_gemini_expert(expert_prompt)
                 
                 if "GO:" in decision:
+                    # Payload exakt auf deine deutschen Spalten ausgerichtet
                     trade_payload = {
-                        "asset": pair,
-                        "direction": "LONG",
-                        "leverage": FIXED_LEVERAGE,
-                        "entry_price": price,
-                        "margin_usd": POSITION_SIZE_USD,
-                        "fees_usd": exact_fees,
-                        "status": "ACTIVE",
-                        "rationale": f"[10x] {decision.split('GO:')[-1].strip()}"
+                        "Vermögenswert": pair,
+                        "Richtung": "LONG",
+                        "Hebelwirkung": FIXED_LEVERAGE,
+                        "Eintrittspreis": price,
+                        "Marge in USD": POSITION_SIZE_USD,
+                        "Gebühren_USD": exact_fees,
+                        "Status": "ACTIVE",
+                        "Begründung": f"[10x] {decision.split('GO:')[-1].strip()}"
                     }
-                    requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json={"role": "assistant", "content": f"⚡ System-Logbuch: Position gestartet für {pair}."})
-                    requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json=trade_payload)
+                    requests.post(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte", headers=HEADERS, json=trade_payload)
                     print(f"🟢 TRADE GEÖFFNET: {pair}")
                     break
             time.sleep(2)
     except Exception as e:
         print(f"Fehler im Trading-Loop: {e}")
 
+def ask_gemini_expert(prompt_text):
+    if not GEMINI_API_KEY: return "⚠️ Key fehlt"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY.strip()}"
+    try:
+        response = requests.post(url, json={"contents": [{"parts": [{"text": prompt_text}]}]}, timeout=15)
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
+    except: return "HOLD"
+
 def process_chat():
     try:
-        messages = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS).json()
+        messages = requests.get(f"{SUPABASE_URL}/rest/v1/Chatnachrichten", headers=HEADERS).json()
         if messages and len(messages) > 0:
-            latest_msg = sorted(messages, key=lambda x: x.get('id', 0))[-1]
+            latest_msg = sorted(messages, key=lambda x: x.get('Ausweis', 0))[-1]
             if latest_msg["role"] == "user":
                 user_input = latest_msg["content"]
                 system_context = "Du bist der unfehlbare Krypto-Trading-Experte. Antworte kurz auf Deutsch. Beende mit LEKTION: ..."
                 bot_response = ask_gemini_expert(f"{system_context}\n\nMaster schreibt: {user_input}")
-                requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={"role": "assistant", "content": bot_response})
+                requests.post(f"{SUPABASE_URL}/rest/v1/Chatnachrichten", headers=HEADERS, json={"role": "assistant", "content": bot_response})
     except Exception as e: print(f"Fehler im Chat: {e}")
 
 # --- HAUPTLOOP ---
 print("🦅 Das vollendete Experten-Triebwerk läuft...")
 while True:
     process_chat()
-    check_and_close_trades() # JETZT NEU: Schließt Trades selbstständig live!
+    check_and_close_trades() 
     run_unlimited_expert_trading()
     time.sleep(15)
