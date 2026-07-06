@@ -117,7 +117,8 @@ with st.sidebar:
     st.header("🧠 KI-Gedächtnis (Dauerspeicher)")
     if isinstance(knowledge, list) and len(knowledge) > 0:
         for k in knowledge: st.caption(f"🛡️ **{k.get('kategorie')}**: {k.get('inhalt')}")
-trades, chat, risiko = get_all_data_live()
+
+trades, chat, risiko = get_all_data_live()  # <--- HIER liegt der Fehler!
 
 # --- MATHEMATISCHE AUSWERTUNG ---
 guthaben = 200.0
