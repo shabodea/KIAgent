@@ -39,6 +39,9 @@ gesamtes_einsatz_volumen = 0.0
 
 if isinstance(trades_data, list) and len(trades_data) > 0:
     for t in trades_data:
+        # Falls ein fehlerhafter Eintrag (z.B. ein String statt Dictionary) reinkommt, überspringen
+        if not isinstance(t, dict): 
+            continue
         status = t.get("Status")
         pnl = float(t.get("net_pnl") or 0.0)
         marge = float(t.get("Marge in USD") or 0.0)
@@ -73,14 +76,16 @@ left_col, right_col = st.columns([1.2, 1])
 
 with left_col:
     st.subheader("📜 Live-Positionen & Strategie-Ziele")
-    if trades_data:
+    
+    # JETZT ABSICHERT: Verhindert den Pandas-ValueError, falls die Tabelle temporär leer ist
+    if isinstance(trades_data, list) and len(trades_data) > 0 and isinstance(trades_data[0], dict):
         df = pd.DataFrame(trades_data)
         # Relevante Spalten filtern basierend auf deinen echten deutschen Spaltennamen
         display_cols = ["Vermögenswert", "Richtung", "Hebelwirkung", "Eintrittspreis", "Ausstiegspreis", "Marge in USD", "Status", "Begründung"]
         available_cols = [c for c in display_cols if c in df.columns]
         st.dataframe(df[available_cols].sort_index(ascending=False), use_container_width=True)
     else:
-        st.info("Aktuell keine aktiven Trades im Paper-Modus.")
+        st.info("Aktuell keine aktiven Trades in der Handelsgeschichte.")
 
     # Logbuch-Bereich
     st.subheader("🖥️ 24/7 Agenten-Logbuch (Was er aktuell tut)")
@@ -123,9 +128,13 @@ with st.sidebar:
     st.code("BTC, ETH, SOL, LINK, DOT, ADA, XRP, MATIC, DOGE, AVAX")
     st.markdown("---")
     st.write("🤖 **Gelerntes Wissen:**")
-    if mem_data and m.get("learned_lessons"):
-        for lesson in m["learned_lessons"]:
-            st.caption(f"• {lesson}")
+    if mem_data and isinstance(mem_data, list) and len(mem_data) > 0:
+        m = mem_data[0]
+        if m.get("learned_lessons"):
+            for lesson in m["learned_lessons"]:
+                st.caption(f"• {lesson}")
+        else:
+            st.caption("• Analysiere Marktzyklen für autonomes Hebel-Trading (10x).")
+            st.caption("• Maximiere Datenaufnahme zur Beschleunigung des Lernprozesses.")
     else:
         st.caption("• Analysiere Marktzyklen für autonomes Hebel-Trading (10x).")
-        st.caption("• Maximiere Datenaufnahme zur Beschleunigung des Lernprozesses.")
