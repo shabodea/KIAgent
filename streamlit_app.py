@@ -22,6 +22,7 @@ st.title("🦅 KI-BROKER EVALUATIONS-ZENTRALE")
 st.caption("Institutionelles Handelsmodell — Mathematische Echtzeit-Überwachung")
 
 # --- DATEN QUERIES ---
+# SO MUSS ES JETZT AUSSEHEN:
 def get_all_data_live():
     try:
         timestamp = int(datetime.utcnow().timestamp())
@@ -30,8 +31,15 @@ def get_all_data_live():
         r = requests.get(f"{SUPABASE_URL}/rest/v1/Risiko_Log?select=*&_ts={timestamp}", headers=HEADERS).json()
         k = requests.get(f"{SUPABASE_URL}/rest/v1/system_knowledge?select=*&_ts={timestamp}", headers=HEADERS).json()
         return t, c, r, k
-    except:
+    except Exception as e:
+        st.sidebar.error(f"Datenbank-Verbindungsfehler: {e}")
         return [], [], [], []
+
+# <--- EXAKT HIERHIN GEHÖRT DER ABRAUF JETZT (GANZ OBEN IM CODE!) --->
+trades, chat, risiko, knowledge = get_all_data_live()
+
+# --- MATHEMATISCHE AUSWERTUNG ---
+
 
 trades, chat, risiko, knowledge = get_all_data_live()
 
