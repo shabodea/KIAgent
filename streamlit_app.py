@@ -21,18 +21,20 @@ st.markdown("""
 st.title("🦅 KI-BROKER EVALUATIONS-ZENTRALE")
 st.caption("Institutionelles Handelsmodell — Mathematische Echtzeit-Überwachung")
 
-# --- DATEN QUERIES ---
-@st.cache_data(ttl=1)
-def get_all_data():
+# --- DATEN QUERIES (CACHE DEAKTIVIERT FÜR ECHTZEIT-CHAT) ---
+def get_all_data_live():
     try:
-        t = requests.get(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte", headers=HEADERS).json()
-        c = requests.get(f"{SUPABASE_URL}/rest/v1/Chatnachrichten", headers=HEADERS).json()
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/Risiko_Log", headers=HEADERS).json()
+        # Wir hängen einen zufälligen Zeitstempel an, um jeglichen Cache im Browser zu umgehen
+        timestamp = int(datetime.utcnow().timestamp())
+        t = requests.get(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=*&_ts={timestamp}", headers=HEADERS).json()
+        c = requests.get(f"{SUPABASE_URL}/rest/v1/Chatnachrichten?select=*&_ts={timestamp}", headers=HEADERS).json()
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/Risiko_Log?select=*&_ts={timestamp}", headers=HEADERS).json()
         return t, c, r
-    except:
+    except Exception as e:
+        st.sidebar.error(f"Datenbank-Verbindungsfehler: {e}")
         return [], [], []
 
-trades, chat, risiko = get_all_data()
+trades, chat, risiko = get_all_data_live()
 
 # --- MATHEMATISCHE AUSWERTUNG ---
 guthaben = 200.0
@@ -41,6 +43,7 @@ loss_trades = 0
 
 if isinstance(trades, list) and len(trades) > 0:
     for t in trades:
+        if not isinstance(t, dict): continue
         if t.get("Status") == "CLOSED":
             pnl = float(t.get("net_pnl") or 0.0)
             guthaben += pnl
@@ -79,8 +82,8 @@ with col_left:
             with st.expander(f"🟢 MARKT-AUFTRAG: {pos.get('Vermögenswert')}", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Einstiegspreis", f"${pos.get('Eintrittspreis')}")
-                c2.metric("Marge (Einsatz)", f"${pos.get('Marge in USD')}", help="Dynamisch berechnet anhand der ATR-Volatilität.")
-                c3.metric("Havel", f"{pos.get('Hebelwirkung')}x")
+                c2.metric("Marge (Einsatz)", f"${pos.get('Marge in USD')}")
+                c3.metric("Hebel", f"{pos.get('Hebelwirkung')}x")
                 
                 st.markdown(f"**🎯 Take-Profit Ziel:** {pos.get('Take_Profit_Preis')}$ | **🛡️ Stop-Loss Schutz:** {pos.get('Stop_Loss_Preis')}$")
                 st.info(f"ℹ️ **Einfache Erklärung des Handelsmusters:**\nDer Bot hat den 15-Minuten-Chart analysiert. Da der Kurs über dem Durchschnitt (EMA) lag und die Gemini-Internetrecherche ein bullisches Sentiment ergab, wurde diese Position eröffnet.")
@@ -103,38 +106,42 @@ with col_left:
 
 with col_right:
     st.subheader("💬 Taktischer Live-Diskurs")
-    chat_container = st.container(height=450) # Box vergrößert für bessere Übersicht
+    chat_container = st.container(height=450)
     with chat_container:
-        if isinstance(chat, list) and len(chat) > 0:
+        # Wenn echte Chatdaten da sind, listen wir sie sauber auf
+        if isinstance(chat, list) and len(chat) > 0 and isinstance(chat[0], dict):
             for msg in sorted(chat, key=lambda x: x.get('Ausweis', 0) if isinstance(x, dict) else 0):
-                with st.chat_message(msg["role"]):
-                    st.write(msg["content"])
+                with st.chat_message(msg.get("role", "user")):
+                    st.write(msg.get("content", ""))
         else:
-            st.write("_Warte auf Eingabe..._")
+            st.info("Noch keine Nachrichten in der Datenbank gefunden.")
 
 st.markdown("---")
 
-# --- STRATEGISCHE BEFEHLSZEILE (Ganz unten für absolute Stabilität) ---
+# --- STRATEGISCHE BEFEHLSZEILE (MIT LIVE-DEBUGGER) ---
 st.subheader("⌨️ Taktische Befehlszeile")
 if prompt := st.chat_input("Gib dem Broker eine Anweisung oder frage nach Markt-Sentiment..."):
-    # POST-Request absetzen
+    # POST-Request absetzen und Antwort prüfen
     try:
-        requests.post(
+        response = requests.post(
             f"{SUPABASE_URL}/rest/v1/Chatnachrichten", 
             headers=HEADERS, 
             json={"role": "user", "content": prompt}
         )
-        st.cache_data.clear()
-        st.rerun()
+        
+        # LIVE-DEBUGGER: Zeigt an, was die Datenbank meldet
+        if response.status_code == 201 or response.status_code == 200:
+            st.success(f"Erfolgreich gesendet! (Status: {response.status_code})")
+            st.rerun()
+        else:
+            st.error(f"Datenbank lehnt Nachricht ab: Code {response.status_code} - {response.text}")
+            
     except Exception as e:
-        st.error(f"Fehler beim Senden: {str(e)}")
+        st.error(f"Netzwerk-Fehler beim Senden: {str(e)}")
 
 # --- SIDEBAR: REALE SYSTEM-EVOLUTION ---
 with st.sidebar:
     st.header("🧠 KI-Gedächtnis (Dauerspeicher)")
-    st.write("Abgesicherte Regeln aus Verlust-Analysen:")
-    
-    # Versuche bot_memory zu laden, falls vorhanden
     try:
         mem = requests.get(f"{SUPABASE_URL}/rest/v1/bot_memory", headers=HEADERS).json()
         if mem and isinstance(mem, list) and len(mem) > 0:
@@ -143,7 +150,7 @@ with st.sidebar:
                 for lesson in lessons:
                     st.caption(f"🛡️ {lesson}")
             else:
-                st.caption("• Noch keine Verluste aufgezeichnet. System im fehlerfreien Zustand.")
+                st.caption("• System im fehlerfreien Zustand.")
         else:
             st.caption("• Verbinde mit Gedächtnis-Speicher...")
     except:
