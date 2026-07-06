@@ -16,17 +16,32 @@ HEADERS = {
 def ask_gemini(prompt_text):
     """Verbindet den Server direkt mit dem echten Google-Gemini-Gehirn"""
     if not GEMINI_API_KEY:
-        return "⚠️ Fehler: Kein GEMINI_API_KEY auf Render hinterlegt!"
+        return "⚠️ Fehler: Kein GEMINI_API_KEY auf Render in den Environment Variables gefunden!"
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+    # Optimierte, stabile API-URL für das aktuellste Modell
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
+    
+    # Exakte JSON-Struktur, die Google verlangt
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": prompt_text
+            }]
+        }]
+    }
     
     try:
         response = requests.post(url, json=payload, timeout=15)
         res_json = response.json()
+        
+        # Falls Google einen Fehlercode zurückliefert
+        if "error" in res_json:
+            return f"❌ Gemini-API Fehler: {res_json['error'].get('message', 'Unbekannter API-Fehler')}"
+            
         return res_json['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        return f"Ausfall im KI-Kortex: {str(e)}"
+        # Gibt im Dashboard genau aus, was schiefgelaufen ist (z.B. Netzwerk oder Format)
+        return f"Ausfall im KI-Kortex: {str(e)} | Response-Vorschau: {str(response.text)[:100]}"
 
 def process_chat_and_learning():
     """Liest deine Chat-Nachrichten, antwortet via Gemini und speichert gelerntes Wissen"""
@@ -34,13 +49,18 @@ def process_chat_and_learning():
         messages = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS).json()
         
         if messages and len(messages) > 0:
-            # Sortiert nach ID, um die allerneueste Nachricht zu finden
             latest_msg = sorted(messages, key=lambda x: x.get('id', 0))[-1]
             
-            # Wenn die letzte Nachricht von DIR (User) kam, muss die KI antworten!
+            # Wenn die letzte Nachricht vom User kam, muss die KI antworten!
             if latest_msg["role"] == "user":
                 user_input = latest_msg["content"]
                 print(f"📥 Neuer Input empfangen: '{user_input}'")
+                
+                # Dem Bot temporär eine "Antwortet..." Nachricht verpassen, damit du siehst, dass er arbeitet
+                requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={
+                    "role": "assistant",
+                    "content": "🤖 *Überlege...*"
+                })
                 
                 system_context = (
                     "Du bist der autonome 10x Krypto-Trading-Agent. Du filterst das Wissen, das dir dein "
@@ -54,7 +74,7 @@ def process_chat_and_learning():
                 # Gemini berechnet die Antwort
                 bot_response = ask_gemini(full_prompt)
                 
-                # 1. Antwort in den Chat schreiben
+                # 1. Die echte Antwort in den Chat schreiben
                 requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={
                     "role": "assistant",
                     "content": bot_response
@@ -84,4 +104,4 @@ print("🦅 Die voll funktionsfähige KI-Maschine läuft jetzt 24/7...")
 
 while True:
     process_chat_and_learning()
-    time.sleep(3)  # Alle 3 Sekunden die Datenbank prüfen
+    time.sleep(4)  # Alle 4 Sekunden prüfen, schont das API-Limit
