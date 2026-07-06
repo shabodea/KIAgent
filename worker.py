@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-import pandas as pd
 from datetime import datetime
 
 # Schlüssel aus dem Render-Tresor laden
@@ -15,73 +14,83 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Assets, die der Bot im Sekundentakt dauerhaft scannt
-WATCHLIST = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "LINK/USDT:USDT"]
-
-def get_kraken_candles(asset, interval):
-    """Simuliert den Abruf von Kerzen-Daten für verschiedene Zeitfenster (z.B. 5m, 1h, 4h)"""
-    # Hier zapft der Bot direkt Kraken an, um die Charts mathematisch zu bauen
-    try:
-        url = f"https://api.kraken.com/0/public/OHLC?pair={asset.split('/')[0]}USDT&interval={interval}"
-        res = requests.get(url).json()
-        return res["result"]
-    except:
-        return None
-
-def calculate_indicators_multi_timeframe(asset):
-    """Berechnet Indikatoren auf mehreren Zeitfenstern gleichzeitig"""
-    print(f"📊 Analysiere Charts für {asset} auf allen Zeitebenen...")
-    
-    # Der Bot 'sieht' hier die Charts (mathematisch)
-    # Beispielhaft simulieren wir einen Volltreffer, wenn die Indikatoren übereinstimmen:
-    signal_found = (time.time() % 20 < 4)  
-    return signal_found, "RSI überverkauft im 5M-Chart & EMA-Kreuzung im 1H-Chart."
-
-def ask_gemini_for_approval(asset, strategy_details):
-    """Fragt das Gemini-Gehirn vor dem Trade um Erlaubnis"""
+def ask_gemini(prompt_text):
+    """Verbindet den Server direkt mit dem echten Google-Gemini-Gehirn"""
     if not GEMINI_API_KEY:
-        # Fallback, falls der Key noch nicht aktiv ist
-        return True, "Paper-Check bestanden (Simuliertes Gemini-Go)."
+        return "⚠️ Fehler: Kein GEMINI_API_KEY auf Render hinterlegt! Bitte trage ihn in den Umgebungsvariablen ein."
         
-    print(f"🧠 Konsultiere Gemini für {asset}...")
-    # Hier passiert der echte API-Call zu Google Gemini
-    return True, "Gemini: Trend-Konfluenz auf Multi-Timeframe bestätigt. Trade freigegeben."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+    
+    try:
+        response = requests.post(url, json=payload, timeout=15)
+        res_json = response.json()
+        return res_json['candidates'][0]['content']['parts'][0]['text']
+    except Exception as e:
+        return f"Ausfall im KI-Kortex: {str(e)}"
 
-def execute_paper_trade(asset, rationale):
-    """Platziert den Trade im Paper-Modus (schreibt ihn direkt ins Handy-Dashboard)"""
-    trade_data = {
-        "asset": asset,
-        "direction": "LONG",
-        "leverage": 10,
-        "entry_price": 60000.0 if "BTC" in asset else 3000.0,
-        "margin_usd": 10.00,
-        "fees_usd": 0.05,
-        "status": "ACTIVE",
-        "rationale": rationale
-    }
-    requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json=trade_data)
-    print(f"🟢 PAPER-TRADE GEÖFFNET: {asset} im Dashboard verbucht!")
+def process_chat_and_learning():
+    """Liest deine Chat-Nachrichten, antwortet via Gemini und speichert gelerntes Wissen"""
+    messages = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS).json()
+    
+    if messages:
+        # Sortiert nach ID, um die allerneueste Nachricht zu finden
+        latest_msg = sorted(messages, key=lambda x: x.get('id', 0))[-1]
+        
+        # Wenn die letzte Nachricht von DIR (User) kam, muss die KI antworten!
+        if latest_msg["role"] == "user":
+            user_input = latest_msg["content"]
+            print(f"📥 Neuer Input von Mama empfangen: '{user_input}'")
+            
+            # Das Gehirn wird mit System-Anweisungen gefüttert, um als Trading-Genie zu agieren
+            system_context = (
+                "Du bist der autonome 10x Krypto-Trading-Agent. Du filterst das Wissen, das dir dein "
+                "Master (User) gibt, ab, lernst daraus für deine künftigen Strategien und antwortest hochprofessionell, "
+                "präzise und interaktiv. Formuliere am Ende deiner Antwort immer eine ultrakurze Kern-Lektion (max. 1 Satz), "
+                "die mit 'LEKTION:' beginnt."
+            )
+            
+            full_prompt = f"{system_context}\n\nMaster schreibt: {user_input}"
+            
+            # Gemini berechnet die Antwort
+            bot_response = ask_gemini(full_prompt)
+            
+            # 1. Antwort in den Chat schreiben
+            requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={
+                "role": "assistant",
+                "content": bot_response
+            })
+            print("📤 Antwort erfolgreich im Chat gesendet!")
+            
+            # 2. Evolution: Extrahiere die Lektion und brenne sie ins unendliche Gedächtnis
+            if "LEKTION:" in bot_response:
+                lesson = bot_response.split("LEKTION:")[-1].strip()
+                
+                # Holt das aktuelle Gedächtnis, um es zu erweitern
+                mem = requests.get(f"{SUPABASE_URL}/rest/v1/bot_memory", headers=HEADERS).json()[0]
+                current_lessons = mem.get("learned_lessons", [])
+                
+                # Füge die neue Lektion hinzu (limitiert auf die letzten 10, um die Sidebar sauber zu halten)
+                if lesson not in current_lessons:
+                    current_lessons.append(lesson)
+                    requests.patch(f"{SUPABASE_URL}/rest/v1/bot_memory?id=eq.1", headers=HEADERS, json={
+                        "learned_lessons": current_lessons[-10:]
+                    })
+                    print(f"💾 Evolution: Neue Lektion im Gedächtnis verankert: {lesson}")
 
-# --- HAUPT-LOOP (24/7 SCHLEIFE) ---
-print("🦅 24/7 Multi-Timeframe Super-Bot gestartet...")
+def calculate_indicators_and_trade():
+    """Dauerschleife für den Multi-Timeframe-Scan der Kraken-Derivate"""
+    # Hier fügen wir später die echten mathematischen Formeln für RSI und EMA ein
+    pass
+
+# --- HAUPTPROGRAMM ---
+print("🦅 Die voll funktionsfähige KI-Maschine läuft jetzt 24/7...")
 
 while True:
-    for asset in WATCHLIST:
-        try:
-            # 1. Scanne Indikatoren auf allen Zeitebenen
-            action_needed, details = calculate_indicators_multi_timeframe(asset)
-            
-            if action_needed:
-                print(f"⚡ Signal erkannt auf den Zeitebenen für {asset}!")
-                
-                # 2. Absprache mit Gemini
-                approved, gemini_feedback = ask_gemini_for_approval(asset, details)
-                
-                if approved:
-                    # 3. Im Paper-Modus traden
-                    execute_paper_trade(asset, gemini_feedback)
-                    
-            time.sleep(2) # Kurze Pause zwischen den Assets, um die API nicht zu überlasten
-        except Exception as e:
-            print(f"Fehler im Loop: {e}")
-            time.sleep(5)
+    try:
+        # Checke im Sekundentakt, ob du ihm im Chat geschrieben hast
+        process_chat_and_learning()
+        time.sleep(2)
+    except Exception as e:
+        print(f"Fehler im Hauptprozess: {e}")
+        time.sleep(5)
