@@ -1,9 +1,8 @@
 import os
 import time
 import requests
-import pandas as pd
 
-# Schlüssel aus dem Render-Tresor laden
+# Schlüssel und Datenbank-Konfiguration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = "https://swyjycklcbcfhiafibar.supabase.co"
 SUPABASE_KEY = "sb_publishable_e4pYpgdnhEEsN3iEZ6rghQ_M7IGgrl4"
@@ -14,109 +13,154 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def get_top_kraken_assets():
-    """Holt die echten Krypto-Paare live von der Kraken-API"""
+# Exakte Kraken Gebührenstruktur (Standard Taker-Gebühr für Spot/Futures)
+KRAKEN_TAKER_FEE = 0.0026  # 0.26%
+
+def get_live_kraken_markets():
+    """Holt alle aktiven USDT-Handelspaare live von Kraken"""
     try:
         url = "https://api.kraken.com/0/public/AssetPairs"
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         all_pairs = res.get("result", {})
-        # Wir filtern die echten USDT-Handelspaare heraus (z.B. BTCUSDT, ETHUSDT)
-        usdt_pairs = [pair for pair in all_pairs.keys() if pair.endswith("USDT")]
-        # Wir nehmen die Top 50 Assets, wie vom Master befohlen
-        return usdt_pairs[:50]
+        # Wir filtern alle echten USDT-Märkte für den globalen Scan heraus
+        return [pair for pair in all_pairs.keys() if pair.endswith("USDT")]
     except Exception as e:
-        print(f"Fehler beim Holen der Kraken-Assets: {e}")
-        return ["XBTUSDT", "ETHUSDT", "SOLUSDT", "LINKUSDT"]
+        print(f"❌ Fehler beim Abruf der Marktliste: {e}")
+        return ["XBTUSDT", "ETHUSDT", "SOLUSDT"]
 
-def ask_gemini(prompt_text):
-    """Verbindet den Server direkt mit dem echten Gemini-Gehirn"""
+def get_orderbook_metrics(pair):
+    """
+    Fragt das echte Live-Orderbuch von Kraken ab und analysiert die Liquidität.
+    Berechnet das Ask/Bid-Verhältnis (Verkaufsdruck vs. Kaufdruck).
+    """
+    try:
+        url = f"https://api.kraken.com/0/public/Depth?pair={pair}&count=20"
+        res = requests.get(url, timeout=10).json()
+        
+        # Kraken gibt das Ergebnis oft mit dem internen Alternativnamen zurück
+        pair_data = list(res.get("result", {}).values())[0]
+        
+        bids = pair_data.get("bids", [])  # Kaufaufträge [[Preis, Volumen, Zeit], ...]
+        asks = pair_data.get("asks", [])  # Verkaufsaufträge
+        
+        if not bids or not asks:
+            return None
+            
+        # Live-Preis (Mittelwert aus bestem Gebot und bestem Angebot)
+        best_bid = float(bids[0][0])
+        best_ask = asks[0][0] # Manchmal String, wir wandeln es sicher um
+        live_price = (best_bid + float(best_ask)) / 2
+        
+        # Mathematische Orderbuchtiefe berechnen (kumuliertes Volumen der Top 20 Orders)
+        total_bid_volume = sum(float(bid[1]) for bid in bids)
+        total_ask_volume = sum(float(ask[1]) for ask in asks)
+        
+        # Orderbuch-Verhältnis (Werte > 1 bedeuten mehr Kaufdruck als Verkaufsdruck)
+        orderbook_ratio = total_bid_volume / total_ask_volume if total_ask_volume > 0 else 1
+        
+        return {
+            "live_price": live_price,
+            "bid_depth": total_bid_volume,
+            "ask_depth": total_ask_volume,
+            "ratio": round(orderbook_ratio, 2)
+        }
+    except Exception as e:
+        print(f"⚠️ Konnte Orderbuch für {pair} nicht lesen: {e}")
+        return None
+
+def ask_gemini_expert(prompt_text):
+    """Verbindung zum aktuellen Gemini-Gehirn für die finale Filterung"""
     if not GEMINI_API_KEY:
-        return "⚠️ Fehler: Kein GEMINI_API_KEY hinterlegt!"
+        return "⚠️ Key fehlt"
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY.strip()}"
     payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
     try:
         response = requests.post(url, json=payload, timeout=15)
-        res_json = response.json()
-        return res_json['candidates'][0]['content']['parts'][0]['text']
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Gemini-Verbindung ausgelastet."
+        return "HOLD"
 
-def process_market_scan_and_trades():
-    """Scanned die echten Märkte und führt autonome Paper-Trades aus"""
+def execute_live_market_analysis():
+    """Der Kernprozess: Scannt den echten Markt, filtert mathematisch und entscheidet"""
     try:
-        # 1. Hole die vom Master gewünschten Top 50 Assets von Kraken
-        assets = get_top_kraken_assets()
-        print(f"🔍 Scanne aktiv {len(assets)} Assets auf Kraken...")
-        
-        # 2. Hole das gelernte Wissen aus der Datenbank, damit der Bot die Strategie kennt
+        # Gelerntes Wissen laden
         mem_res = requests.get(f"{SUPABASE_URL}/rest/v1/bot_memory", headers=HEADERS).json()
-        learned_context = ""
-        if mem_res:
-            learned_context = ", ".join(mem_res[0].get("learned_lessons", []))
+        learned_context = ", ".join(mem_res[0].get("learned_lessons", [])) if mem_res else ""
 
-        # 3. Wir simulieren eine mathematische Marktprüfung für die Assets
-        # (Sobald er eine statistische Abweichung findet, schlägt er zu)
-        for asset in assets[:5]: # Wir prüfen beispielhaft die vordersten Paare im Loop
-            # Hier simulieren wir ein technisches Signal (z.B. RSI unter 30 / überverkauft)
-            # Damit er jetzt direkt anfängt zu traden, triggern wir ein Test-Signal:
-            signal_detected = True 
-            
-            if signal_detected:
-                # Absprache mit Gemini unter Einbeziehung deines gelernten Wissens!
-                prompt = (
-                    f"Du bist der autonome Krypto-Trading-Bot. Gelerntes Wissen: {learned_context}. "
-                    f"Signal erkannt für {asset}. Validiere das Setup und gib eine kurze Begründung ab. "
-                    "Antworte mit 'GO:', gefolgt von deiner Begründung."
+        # Echten Markt holen
+        all_pairs = get_live_kraken_markets()
+        print(f"🧠 Experten-Scan: Analysiere den gesamten Kraken-Markt ({len(all_pairs)} Paare)...")
+
+        # Wir prüfen die Märkte nacheinander auf echte Orderbuch-Ineffizienzen
+        for pair in all_pairs[:30]:  # Wir scannen die ersten 30 liquiden Paare tiefgehend
+            metrics = get_orderbook_metrics(pair)
+            if not metrics:
+                continue
+                
+            # Erster mathematischer Filter vor dem KI-Einsatz: 
+            # Wir triggern ein Signal nur, wenn das Orderbuch ein klares Ungleichgewicht (Kaufdruck) zeigt
+            if metrics["ratio"] > 1.5: 
+                print(f"🎯 Auffälliges Orderbuch-Ungleichgewicht bei {pair}! Ratio: {metrics['ratio']}")
+                
+                # Exakte Gebührenberechnung für einen Test-Einsatz von z.B. 100 USD Margin
+                test_margin = 100.0
+                estimated_fees = test_margin * KRAKEN_TAKER_FEE * 2 # Einstieg + Ausstieg
+                
+                expert_prompt = (
+                    f"Du bist der unfehlbare Krypto-Trading-Experte. Dein Gedächtnis: {learned_context}.\n"
+                    f"Asset: {pair} | Aktueller Live-Preis: {metrics['live_price']}\n"
+                    f"Echtes Orderbuch-Verhältnis (Kauf-/Verkaufsdruck): {metrics['ratio']} (Werte > 1.5 sind stark bullisch).\n"
+                    f"Berechnete Kraken-Gebühren für diesen Trade: {estimated_fees} USD.\n"
+                    f"Aufgabe: Lohnt sich hier ein schneller, profitabler Long-Trade, um die Gebühren weit zu übertreffen?\n"
+                    "Antworte strikt mit 'GO: [Deine Begründung]' oder 'HOLD'."
                 )
-                decision = ask_gemini(prompt)
+                
+                decision = ask_gemini_expert(expert_prompt)
                 
                 if "GO:" in decision:
-                    # Echten Paper-Trade im Dashboard ausführen!
-                    trade_data = {
-                        "asset": asset,
+                    rationale_text = decision.split("GO:")[-1].strip()
+                    
+                    trade_payload = {
+                        "asset": pair,
                         "direction": "LONG",
-                        "leverage": 10,
-                        "entry_price": 100.0, # Platzhalter, wird gleich durch Live-Preis ersetzt
-                        "margin_usd": 10.00,
-                        "fees_usd": 0.05,
+                        "leverage": 5, # Moderater Hebel für den Anfang
+                        "entry_price": metrics["live_price"],
+                        "margin_usd": test_margin,
+                        "fees_usd": estimated_fees,
                         "status": "ACTIVE",
-                        "rationale": decision.split("GO:")[-1].strip()
+                        "rationale": f"[Live-Orderbuch Analyse] {rationale_text}"
                     }
+                    
+                    # In Supabase loggen und Trade abspeichern
                     requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json={
                         "role": "assistant",
-                        "content": f"⚡ Automatischer Trade gestartet für {asset}."
-                    }) # Log-Eintrag
+                        "content": f"🔥 Live-Orderbuch-Ausbruch erkannt bei {pair}! Ratio: {metrics['ratio']}. Trade gestartet."
+                    })
+                    requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json=trade_payload)
+                    print(f"🟢 EXPERTEN-TRADE ERÖFFNET: {pair} zu {metrics['live_price']}")
+                    break # Einen Trade nach dem anderen abwickeln
                     
-                    # Schreibt den Trade scharf in deine Tabelle!
-                    requests.post(f"{SUPABASE_URL}/rest/v1/trade_history", headers=HEADERS, json=trade_data)
-                    print(f"🟢 Trade erfolgreich eröffnet für {asset}!")
-                    break # Verhindert, dass er im ersten Durchlauf alle 50 auf einmal kauft
-                    
+            time.sleep(1) # Schonung der API-Rate-Limits
+            
     except Exception as e:
-        print(f"Fehler im Marktprozess: {e}")
+        print(f"Fehler im Analyse-Loop: {e}")
 
 def process_chat():
-    """Prüft und beantwortet deine Nachrichten im Cockpit"""
     try:
         messages = requests.get(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS).json()
         if messages and len(messages) > 0:
             latest_msg = sorted(messages, key=lambda x: x.get('id', 0))[-1]
             if latest_msg["role"] == "user":
                 user_input = latest_msg["content"]
-                
-                system_context = "Du bist der autonome Krypto-Trading-Agent. Antworte kurz und knackig auf Deutsch. Beende mit LEKTION: ..."
-                bot_response = ask_gemini(f"{system_context}\n\nMaster schreibt: {user_input}")
-                
-                requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={
-                    "role": "assistant",
-                    "content": bot_response
-                })
+                system_context = "Du bist der unfehlbare Krypto-Trading-Experte. Antworte kurz, präzise und professionell auf Deutsch. Beende mit LEKTION: ..."
+                bot_response = ask_gemini_expert(f"{system_context}\n\nMaster schreibt: {user_input}")
+                requests.post(f"{SUPABASE_URL}/rest/v1/chat_messages", headers=HEADERS, json={"role": "assistant", "content": bot_response})
     except Exception as e:
-        print(f"Fehler beim Chat-Check: {e}")
+        print(f"Fehler im Chat-Check: {e}")
 
-# --- HAUPTLOOP ---
-print("🦅 Das scharfe Triebwerk läuft jetzt 24/7...")
+# --- HAUPTPROGRAMM ---
+print("🦅 Experten-Triebwerk Stufe 1 läuft live und ununterbrochen...")
 while True:
     process_chat()
-    process_market_scan_and_trades()
-    time.sleep(10) # Alle 10 Sekunden ein kompletter Durchlauf
+    execute_live_market_analysis()
+    time.sleep(15)
