@@ -168,9 +168,9 @@ def main():
         except Exception as e:
             print(f"🔥 Worker Fehler: {e}", flush=True)
 
-        # Sichere 20 Sekunden Pause. Ergibt 3 Anfragen pro Minute.
-        # Damit bleiben wir weit unter dem Limit von 15 Anfragen!
-        time.sleep(20) 
+        # Die absolute Sicherheitsbremse für den Free-Tier:
+        # Garantiert, dass der Google-Zähler wieder auf 0 steht!
+        time.sleep(65) 
 
 if __name__ == "__main__":
     main()
