@@ -104,14 +104,50 @@ with col_right:
 
 st.markdown("---")
 
-# --- STRATEGISCHE BEFEHLSZEILE GANZ UNTEN ---
+# ==================================================
+# KI CHAT EINGABE
+# ==================================================
+
 st.subheader("⌨️ Taktische Befehlszeile")
-if prompt := st.chat_input("Gib dem Broker eine Anweisung...", key="unique_broker_chat_input_2026"):
-    if send_chat_message("user", prompt):
+
+
+prompt = st.chat_input(
+    "Gib dem Broker eine Anweisung...",
+    key="unique_broker_chat_input_2026"
+)
+
+
+if prompt:
+
+
+    st.write(
+        "📤 Sende Nachricht:",
+        prompt
+    )
+
+
+    success = send_chat_message(
+        "user",
+        prompt
+    )
+
+
+    if success:
+
+        st.success(
+            "✅ Nachricht wurde an Supabase gesendet."
+        )
+
         st.cache_data.clear()
+
         st.rerun()
+
+
     else:
-        st.error("Fehler beim Senden der Nachricht an Supabase.")
+
+        st.error(
+            "❌ Supabase Speicherung fehlgeschlagen."
+        )
 
 # --- SIDEBAR: UNSTERBLICHES GEDÄCHTNIS ---
 with st.sidebar:
