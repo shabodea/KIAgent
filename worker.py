@@ -29,3 +29,26 @@ def get_trading_decision(market_data):
     except Exception as e:
         print(f"Fehler: {e}")
         return {"decision": "HOLD", "reasoning": "Fehler"}
+import time
+
+# ... (dein restlicher Code mit der get_trading_decision Funktion) ...
+
+if __name__ == "__main__":
+    print("🚀 Genie-Modus aktiviert. Warte auf Marktdaten...")
+    while True:
+        try:
+            # Hier holst du deine Daten
+            # market_data = get_live_data() 
+            
+            # Hier triffst du die Entscheidung
+            # decision = get_trading_decision(market_data)
+            
+            # Hier schreibst du in Supabase
+            # ...
+            
+            print("Zyklus abgeschlossen. Warte 60 Sekunden...")
+            time.sleep(60) # Der Bot macht eine Minute Pause, damit er nicht rattert
+            
+        except Exception as e:
+            print(f"Fehler im Loop: {e}")
+            time.sleep(10) # Bei Fehler kurz warten und neu versuchen
