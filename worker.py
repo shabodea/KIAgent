@@ -20,17 +20,17 @@ gemini_agent = GeminiCoreAgent()
 def get_live_kraken_markets():
     try:
         url = "https://api.kraken.com/0/public/AssetPairs"
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url, timeout=5).json()
         if "result" not in res: return ["XBTUSDT", "ETHUSDT"]
         pairs = [pair for pair in res.get("result", {}).keys() if pair.endswith("USDT")]
-        return pairs[:15]
+        return pairs[:3]  # TEMPORÄR AUF 3 MÄRKTE REDUZIERT FÜR EXTREME CHAT-GESCHWINDIGKEIT
     except:
         return ["XBTUSDT", "ETHUSDT"]
 
 def calculate_advanced_metrics(pair):
     try:
         url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval=15"
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url, timeout=5).json()
         if "result" not in res or not res["result"]: return None
             
         data_points = list(res["result"].values())[0]
@@ -53,7 +53,7 @@ def calculate_advanced_metrics(pair):
         return None
 
 def run_trading_cycle():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚙️ Starte mathematischen Marktscan...")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚙️ Starte mathematischen Marktscan...", flush=True)
     märkte = get_live_kraken_markets()
     
     for markt in märkte:
@@ -64,13 +64,14 @@ def run_trading_cycle():
         preis = metriken["live_price"]
         ema = metriken["ema"]
         
+        print(f" -> Markt: {markt} | Preis: {preis}$ | RSI: {rsi} | EMA20: {ema}", flush=True)
+        
         if preis > ema and rsi < 45:
-            print(f"🎯 SIGNAL GEFUNDEN FÜR {markt}! Kontaktiere Agenten für Sentiment...")
-            # Das Gehirn entscheidet autonom über das Markt-Sentiment
+            print(f"🎯 SIGNAL GEFUNDEN FÜR {markt}! Kontaktiere Agenten...", flush=True)
             sentiment = gemini_agent.execute_thought_cycle(f"Analysiere das aktuelle Internet-Sentiment für {markt}. Antworte NUR mit 'BUY' oder 'HOLD'.")
             
             if "BUY" in sentiment.upper():
-                print(f"🚀 Agent gibt GO! Trage Trade für {markt} ein...")
+                print(f"🚀 Agent gibt GO! Trage Trade für {markt} ein...", flush=True)
                 trade_data = {
                     "Vermögenswert": markt,
                     "Richtung": "LONG",
@@ -88,8 +89,15 @@ def run_trading_cycle():
                 break
 
 if __name__ == "__main__":
-    print("🦅 KIAgent Triebwerk mit integriertem KI-Gehirn aktiv...")
+    # Das PYTHONUNBUFFERED-Äquivalent im Code erzwingen
+    print("🦅 KIAgent Triebwerk mit integriertem KI-Gehirn aktiv...", flush=True)
+    
     while True:
-        gemini_agent.process_live_chat() # <--- HIER DECKELT JETZT DAS NEUE GEHIRN DEN CHAT
+        # 1. Priorität: Sofort den Chat wegschreiben
+        gemini_agent.process_live_chat()
+        
+        # 2. Priorität: Markt-Scan ausführen
         run_trading_cycle()
-        time.sleep(20)
+        
+        # Kurze Atempause, um die API-Limits nicht zu sprengen
+        time.sleep(5)
