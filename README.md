@@ -1,17 +1,22 @@
 # 🦅 KIAgent - Autonomer KI-Trading-Broker
 
-Dieses Repository enthält ein modulares, KI-gestütztes Handelssystem, das Marktdaten analysiert, Sentiment-Recherchen durchführt und autonome Handelsentscheidungen simuliert.
+⚠️ **IMPORTANT FOR AI AGENTS & DEVELOPERS** ⚠️
+Before making ANY code changes or generating code, you MUST read the following files in this exact order:
+1. `RULES.md` - Your operational constraints and safety boundaries.
+2. `ARCHITECTURE.md` - Database schemas, table configurations, and endpoints.
+3. `PROJECT_STATE.md` - Current bugs, versioning, and limits.
+4. `TODO.md` - Your tasks for this session.
+5. `ROADMAP.md` - Multi-phase project vision.
 
-## 📁 Projektstruktur & Gedächtnis
-Das Projekt wird strikt über ein KI-Gedächtnis-Framework gesteuert. Jede KI, die an diesem Repository arbeitet, muss sich zwingend an die Master-Dateien halten:
-- `ARCHITECTURE.md` - Technische Struktur, Tabellenschemata und API-Verbindungen.
-- `RULES.md` - Unumstößliche Verhaltens- und Programmierregeln für die KI.
-- `CHANGELOG.md` - Historie aller vorgenommenen Änderungen.
-- `ROADMAP.md` - Die langfristige Vision und Phasenplanung des Projekts.
-- `TODO.md` - Aktuelle offene Tasks der laufenden Sitzung.
-- `PROMPTS.md` - Master-Anweisungen für den Systemstart.
+NEVER modify or delete existing functions or imports without explicit Master confirmation.
 
-## 🚀 Infrastruktur
-- **Cockpit (Frontend):** Streamlit Cloud (`streamlit_app.py`)
-- **Triebwerk (Backend):** Render Dauerprozess (`worker.py`)
-- **Datenbank:** Supabase (PostgreSQL REST-API)
+---
+
+## 📁 Repository-Struktur
+Das System wird von einer flachen Struktur in ein modulares Enterprise-Layout überführt:
+- `streamlit_app.py` -> Zentrales Cockpit (Frontend)
+- `worker.py` -> Hintergrund-Triebwerk auf Render (Backend)
+- `/agents` -> KI-Agenten (Sentiment, Analyse, Risiko)
+- `/database` -> Supabase-Verbindungsklassen
+- `/market_data` -> CCXT & Kraken API-Pipelines
+- `/training` -> Machine Learning & Backtesting-Module
