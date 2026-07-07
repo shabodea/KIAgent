@@ -8,8 +8,7 @@ if not os.environ["OPENAI_API_KEY"]:
     raise ValueError("FEHLER: OPENROUTER_API_KEY ist in Render nicht gesetzt!")
 
 client = OpenAI(
-    base_url="https://openrouter.ai/api/v1"
-)
+    base_url="https://openrouter.ai/api/v1")
 
 def get_trading_decision(market_data):
     """
