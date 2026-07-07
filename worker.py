@@ -1,16 +1,13 @@
 import os
 from openai import OpenAI
 
-# Wir holen den Key aus deiner Render-Variable
-my_key = os.environ.get("OPENROUTER_API_KEY")
+# Wir setzen den Key direkt in die Variable, die die Library zwingend sucht
+os.environ["OPENAI_API_KEY"] = os.environ.get("OPENROUTER_API_KEY", "")
 
-# Falls der Key leer ist, geben wir eine klare Fehlermeldung
-if not my_key:
-    raise ValueError("FEHLER: OPENROUTER_API_KEY wurde in Render nicht gefunden!")
+if not os.environ["OPENAI_API_KEY"]:
+    raise ValueError("FEHLER: OPENROUTER_API_KEY ist in Render nicht gesetzt!")
 
-# Wir initialisieren den Client
 client = OpenAI(
-    api_key=my_key,
     base_url="https://openrouter.ai/api/v1"
 )
 )
