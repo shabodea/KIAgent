@@ -2,283 +2,80 @@ import sys
 import os
 import requests
 
-
-# ==================================================
-# SYSTEM PFAD
-# ==================================================
-
-BASE_PATH = os.path.dirname(
-    os.path.dirname(
-        os.path.abspath(__file__)
-    )
-)
-
-if BASE_PATH not in sys.path:
-    sys.path.insert(0, BASE_PATH)
-
-
-# ==================================================
-# IMPORTS
-# ==================================================
+# --- SYSTEM-WEGWEISER ---
+ZENTRALER_PFAD = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ZENTRALER_PFAD not in sys.path:
+    sys.path.insert(0, ZENTRALER_PFAD)
 
 from config.settings import GEMINI_API_KEY
-from database.supabase import (
-    get_all_data_live,
-    send_chat_message
-)
-
-
-# ==================================================
-# GEMINI CORE AGENT
-# ==================================================
+from database.supabase import get_all_data_live, send_chat_message
 
 class GeminiCoreAgent:
-
-
     def __init__(self):
-
-        self.model = "gemini-3.5"
+        self.model = "gemini-1.5-flash"
         self.api_key = GEMINI_API_KEY
 
-        print(
-            f"🤖 Gemini Agent geladen: {self.model}",
-            flush=True
-        )
-
-
-    # ==================================================
-    # GEMINI API
-    # ==================================================
-
     def execute_thought_cycle(self, user_prompt):
+        trades, chat, risiko, knowledge = get_all_data_live()
+        
+        system_kontext = f"""
+        Du bist der autonome Chef-Analyst des KIAgent-Handelssystems.
+        Du bewohnst das Dashboard und interagierst live mit dem Master.
+        
+        AKTUELLES SYSTEM-GEDÄCHTNIS:
+        - Risikostatus: {str(risiko[:1] if risiko else 'OPEN')}
+        - Bekanntes Wissen/Regeln: {str(knowledge)}
+        - Offene Positionen: {str(trades[:5] if trades else 'Keine aktiven Trades')}
+        """
+        
+        if not self.api_key:
+            print("❌ FEHLER: Kein GEMINI_API_KEY gefunden! Prüfe die Render Environment Variables.", flush=True)
+            return "System-Fehler: Mein API-Schlüssel fehlt. Ich bin offline."
 
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key.strip()}"
+        prompt_komplett = f"{system_kontext}\n\nMaster-Anweisung: {user_prompt}\n\nAntworte kurz und präzise auf Deutsch als Broker:"
+        
         try:
-
-            trades, chat, risiko, knowledge = get_all_data_live()
-
-
-            system_context = f"""
-
-Du bist der zentrale KI-Agent eines Trading-Systems.
-
-Deine Aufgaben:
-
-- erkläre Marktbewegungen
-- analysiere Trading-Entscheidungen
-- überwache Risiken
-- unterstütze den Nutzer
-- lerne aus gespeicherten Erfahrungen
-
-SYSTEMSTATUS:
-
-Risiko:
-{risiko}
-
-Wissen:
-{knowledge}
-
-Letzte Trades:
-{trades[:5] if trades else "Keine Trades"}
-
-"""
-
-
-            if not self.api_key:
-
-                return "❌ GEMINI_API_KEY fehlt."
-
-
-            url = (
-                "https://generativelanguage.googleapis.com/"
-                f"v1beta/models/{self.model}:generateContent"
-                f"?key={self.api_key.strip()}"
-            )
-
-
-            payload = {
-
-                "contents": [
-
-                    {
-
-                        "parts": [
-
-                            {
-
-                                "text":
-                                system_context
-                                +
-                                "\n\nBenutzer Anfrage:\n"
-                                +
-                                user_prompt
-
-                            }
-
-                        ]
-
-                    }
-
-                ]
-
-            }
-
-
-            response = requests.post(
-                url,
-                json=payload,
-                timeout=30
-            )
-
-
-            data = response.json()
-
-
-            print(
-                f"Gemini API Antwort: {data.keys()}",
-                flush=True
-            )
-
-
-            if "candidates" not in data:
-
-                return (
-                    "❌ Gemini Fehler:\n"
-                    +
-                    str(data)
-                )
-
-
-            return (
-                data["candidates"][0]
-                ["content"]
-                ["parts"][0]
-                ["text"]
-            )
-
-
+            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt_komplett}]}]}, timeout=15).json()
+            
+            # Falls Google einen Fehler zurückgibt (z.B. falscher Key)
+            if "error" in res:
+                print(f"❌ Google API Fehler: {res['error']['message']}", flush=True)
+                return f"Google API Fehler: {res['error']['message']}"
+                
+            return res['candidates'][0]['content']['parts'][0]['text']
         except Exception as e:
-
-            return (
-                f"❌ Denkprozess Fehler: {e}"
-            )
-
-
-    # ==================================================
-    # LIVE CHAT
-    # ==================================================
+            print(f"❌ Fehler im Denkprozess (API Error): {str(e)}", flush=True)
+            return f"Fehler im Denkprozess: {str(e)}"
 
     def process_live_chat(self):
-
         try:
-
-            print(
-                "💬 Chatprüfung gestartet...",
-                flush=True
-            )
-
-
             _, chat, _, _ = get_all_data_live()
+            if not chat or len(chat) == 0:
+                return
 
-
-            print(
-                f"Chat Inhalt: {chat}",
-                flush=True
-            )
-
-
-            if not chat:
-
-                print(
-                    "Keine Chatnachrichten gefunden.",
-                    flush=True
-                )
-
-                return False
-
-
-
-            latest = sorted(
-                chat,
-                key=lambda x: x.get("id",0)
-            )[-1]
-
-
-            print(
-                f"Letzte Nachricht: {latest}",
-                flush=True
-            )
-
-
-
-            role = latest.get("role")
-
-
-            if role != "user":
-
-                print(
-                    "Letzte Nachricht ist keine User Nachricht.",
-                    flush=True
-                )
-
-                return False
-
-
-
-            user_text = latest.get(
-                "content",
-                ""
-            )
-
-
-            if not user_text:
-
-                return False
-
-
-
-            print(
-                f"🧠 Gemini verarbeitet: {user_text}",
-                flush=True
-            )
-
-
-
-            answer = self.execute_thought_cycle(
-                user_text
-            )
-
-
-
-            print(
-                f"💬 Gemini Antwort: {answer[:200]}",
-                flush=True
-            )
-
-
-
-            send_chat_message(
-                "assistant",
-                answer
-            )
-
-
-
-            print(
-                "✅ Antwort in Supabase gespeichert.",
-                flush=True
-            )
-
-
-            return True
-
-
-
+            # SICHERHEITS-FIX: Wir sortieren nach der 'created_at' Zeit! 
+            # Das verhindert den tödlichen UUID-Crash.
+            sortierter_chat = sorted(chat, key=lambda x: x.get('created_at', ''))
+            
+            letzte_gesamt_nachricht = sortierter_chat[-1]
+            user_nachrichten = [m for m in sortierter_chat if m.get("role") == "user"]
+            
+            if user_nachrichten:
+                letzte_user_nachricht = user_nachrichten[-1]
+                
+                if letzte_gesamt_nachricht["role"] == "user":
+                    user_input = letzte_user_nachricht["content"]
+                    
+                    print(f"🧠 Agent erkennt neue Nachricht vom Master. Denke nach...", flush=True)
+                    
+                    ki_antwort = self.execute_thought_cycle(user_input)
+                    
+                    erfolg = send_chat_message("assistant", ki_antwort)
+                    if erfolg:
+                        print("✅ KI-Antwort erfolgreich in Supabase gespeichert!", flush=True)
+                    else:
+                        print("❌ Fehler beim Speichern der KI-Antwort in Supabase!", flush=True)
         except Exception as e:
-
-
-            print(
-                f"🔥 Fehler im Chat-Prozess: {e}",
-                flush=True
-            )
-
-            return False
+            # CRITICAL: flush=True hinzugefügt, damit Render den Fehler anzeigt!
+            print(f"❌ Kritischer Absturz im Agenten-Chat-Loop: {e}", flush=True)
