@@ -230,7 +230,8 @@ st.markdown("---")
 
 # --- STRATEGISCHE BEFEHLSZEILE GANZ UNTEN ---
 st.subheader("⌨️ Taktische Befehlszeile")
-if prompt := st.chat_input("Gib dem Broker eine Anweisung..."):
+# DAMIT ERSETZEN:
+if prompt := st.chat_input("Gib dem Broker eine Anweisung...", key="unique_broker_chat_input_2026"):
     try:
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/chat_messages", 
