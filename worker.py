@@ -9,7 +9,7 @@ if not os.environ["OPENAI_API_KEY"]:
 
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1"
-)
+
 )
 
 def get_trading_decision(market_data):
