@@ -50,6 +50,8 @@ class ModelRouter:
         except Exception as e:
             return None, str(e)
 
+   # ... (RateLimiter Klasse bleibt gleich) ...
+
     def call_groq(self, prompt, system_context=""):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
@@ -60,8 +62,9 @@ class ModelRouter:
         if system_context:
             messages.append({"role": "system", "content": system_context})
         messages.append({"role": "user", "content": prompt})
+        # ✅ AKTUELLES GROQ-MODELL
         payload = {
-            "model": "mixtral-8x7b-32768",  # oder "llama3-70b-8192"
+            "model": "llama-3.3-70b-versatile",  # oder "llama3-70b-8192"
             "messages": messages,
             "temperature": 0.7
         }
