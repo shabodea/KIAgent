@@ -109,6 +109,39 @@ def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning, target
     router = ModelRouter()
     answer, _ = router.route(prompt, system_context="Du bist ein Coach.", preferred_model="deepseek")
     send_chat_message("system", f"📘 Lektion: {answer}")
+def trigger_self_review(asset):
+    """
+    Der Bot analysiert seine letzten 10 Trades, lernt daraus und sagt dir Bescheid.
+    """
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=direction,net_pnl,Begründung,target_price,Austrittspreis&Vermögenswert=eq.{asset}&Status=eq.CLOSED&order=id.desc&limit=10",
+            headers=HEADERS
+        ).json()
+        
+        if not isinstance(resp, list) or len(resp) == 0:
+            return
+
+        # DeepSeek analysiert seine eigenen Entscheidungen
+        prompt = f"""
+        Hier sind meine letzten 10 Trades auf {asset}: {str(resp)}.
+        
+        Aufgaben:
+        1. Analysiere, warum meine Gewinner gewonnen und meine Verlierer verloren haben.
+        2. Wenn ich mein Trading verbessern kann, sag mir genau, was ich tun soll.
+        3. Wenn du selbst eine Regel in deiner Logik (z.B. RSI-Grenzen) ändern kannst, sag mir, was du jetzt anders entscheiden wirst.
+        
+        Antworte in 2-3 Sätzen. Sag mir nur, was ich wissen muss.
+        """
+        
+        router = ModelRouter()
+        answer, _ = router.route(prompt, system_context="Du bist ein Analyst.", preferred_model="deepseek")
+        
+        # Wichtig: Der Bot sagt dir über den Chat, was er ändern wird!
+        send_chat_message("system", f"🤔 **SELBST-REFLEKTION zu {asset}:** {answer}")
+        
+    except Exception as e:
+        print(f"Fehler bei der Selbstreflexion: {e}")
 
 def main_loop():
     print("⚡ DeepSeek-Scalper aktiv (Gebührenbewusst, Small Profits). 15s pro Asset.", flush=True)
