@@ -24,7 +24,7 @@ st.markdown("""
 MONITORED_ASSETS = [
     "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRX-USD", 
     "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
-    "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "MIDNIGHT-USD"
+    "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "NIGHT-USD"
 ]
 
 TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d']
