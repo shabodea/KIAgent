@@ -31,9 +31,11 @@ def get_current_balance():
             f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=net_pnl&Status=eq.CLOSED",
             headers=HEADERS
         ).json()
-        if not resp: return 200.0
-        total_pnl = sum(float(t.get('net_pnl', 0.0)) for t in resp)
-        return 200.0 + total_pnl
+        # Nur wenn es eine Liste ist, summieren wir die PnLs
+        if isinstance(resp, list):
+            total_pnl = sum(float(t.get('net_pnl', 0.0)) for t in resp)
+            return 200.0 + total_pnl
+        return 200.0
     except Exception as e:
         print(f"⚠️ Fehler beim Guthaben: {e}")
         return 200.0
@@ -65,16 +67,19 @@ def get_performance_summary(symbol):
             f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=direction,net_pnl,Begründung&Vermögenswert=eq.{symbol}&Status=eq.CLOSED&order=id.desc&limit=5",
             headers=HEADERS
         ).json()
-        if not resp: return "Keine bisherigen Trades."
+        if not isinstance(resp, list) or len(resp) == 0: 
+            return "Keine bisherigen Trades."
         summary = []
         for t in resp:
+            if not isinstance(t, dict): continue
             direction = t.get('direction', 'HOLD')
             pnl = t.get('net_pnl', 0.0)
             reason = t.get('Begründung', 'Keine Angabe')[:30]
             win_loss = "GEWINN" if pnl > 0 else "VERLUST"
             summary.append(f"{direction} ({win_loss}): {pnl:.2f}$ - {reason}...")
         return "\n".join(summary)
-    except: return "Konnte Historie nicht laden."
+    except: 
+        return "Konnte Historie nicht laden."
 
 def get_entry_decision(market_data, balance):
     router = ModelRouter()
@@ -114,7 +119,7 @@ def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning):
     send_chat_message("system", f"📘 Lektion aus dem {profit_text}: {answer}")
 
 def main_loop():
-    print("🧠 KI-Trader gestartet (10s Chat-Intervall, 60s Trading-Intervall).", flush=True)
+    print("🧠 KI-Trader gestartet (robuste Fehlerbehandlung). 24/7 aktiv.", flush=True)
     from agents.gemini_agent import GeminiCoreAgent
     agent = GeminiCoreAgent()
     last_chat_id = 0
@@ -136,12 +141,15 @@ def main_loop():
                     headers=HEADERS
                 ).json()
                 
-                has_position = len(active_trades) > 0
-                if has_position:
-                    entry_price = float(active_trades[0]['Eintrittspreis'])
-                    direction = active_trades[0]['direction']
-                else:
-                    entry_price, direction = 0.0, "HOLD"
+                has_position = False
+                entry_price = 0.0
+                direction = "HOLD"
+                if isinstance(active_trades, list) and len(active_trades) > 0:
+                    first_trade = active_trades[0]
+                    if isinstance(first_trade, dict) and 'Eintrittspreis' in first_trade:
+                        has_position = True
+                        entry_price = float(first_trade['Eintrittspreis'])
+                        direction = first_trade.get('direction', 'HOLD')
                 
                 rsi_5m = calculate_rsi(data['closes_5m'])
                 rsi_15m = calculate_rsi(data['closes_15m'])
@@ -169,15 +177,15 @@ def main_loop():
                             expected_move='Scalping', margin_usd=margin_per_trade, leverage=10, status='ACTIVE'
                         )
 
-            # Chat nur alle 10 Sekunden abfragen (um die Latenz extrem zu reduzieren)
-            if int(time.time()) % 10 == 0:
-                new_id = agent.process_live_chat(last_chat_id)
-                if new_id is not None: last_chat_id = new_id
+                # Chat nur alle 10 Sekunden abfragen
+                if int(time.time()) % 10 == 0:
+                    new_id = agent.process_live_chat(last_chat_id)
+                    if new_id is not None: last_chat_id = new_id
 
-            time.sleep(1)
-        except Exception as e:
-            print(f"❌ Fehler im Hauptloop: {e}", flush=True)
-            time.sleep(10)
+                time.sleep(1)
+            except Exception as e:
+                print(f"❌ Fehler im Hauptloop: {e}", flush=True)
+                time.sleep(10)
 
 if __name__ == "__main__":
     main_loop()
