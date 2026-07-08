@@ -15,7 +15,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-MONITORED_ASSETS = ["BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "TRX-USD", "LINK-USD", "SUI-USD","TAO-USD","RENDER-USD"]
+# --- Vollständige Asset-Liste (19 Krypto-Assets auf Kraken) ---
+MONITORED_ASSETS = [
+    "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRX-USD", 
+    "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
+    "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "NIGHT-USD"
+]
 
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1: return 50
