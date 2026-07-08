@@ -37,3 +37,33 @@ def send_chat_message(role, content):
     except Exception as e:
         print(f"Fehler beim Senden der Chat-Nachricht: {e}")
         return False
+
+def save_trade(asset, direction, entry_price, reasoning, status='PAPER'):
+    """
+    Speichert eine Trading-Entscheidung in der Handelsgeschichte-Tabelle.
+    """
+    try:
+        data = {
+            "Vermögenswert": asset,
+            "Richtung": direction,
+            "Eintrittspreis": entry_price,
+            "Begründung": reasoning,
+            "Status": status,
+            "net_pnl": 0.0,  # bei Paper-Trading erstmal 0
+            "Marge in USD": 0.0,
+            "Hebelwirkung": 1
+        }
+        response = requests.post(
+            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte",
+            headers=HEADERS,
+            json=data
+        )
+        if response.status_code in [200, 201]:
+            print(f"✅ Trade gespeichert: {direction} {asset} zu {entry_price}")
+            return True
+        else:
+            print(f"❌ Fehler beim Speichern des Trades: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Exception beim Speichern: {e}")
+        return False
