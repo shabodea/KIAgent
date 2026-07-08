@@ -37,7 +37,7 @@ def save_trade(asset, direction, entry_price, stop_loss, take_profit, reasoning,
             "Stop_Loss_Preis": stop_loss,
             "Take_Profit_Preis": take_profit,
             "Begründung": reasoning,
-            "Indikatoren_Setup": indicators,
+            "Indikatoren_Setup": indicators,  # Jetzt mit Volumen und Orderbuch!
             "Erwartete_Bewegung": expected_move,
             "Status": status,
             "net_pnl": 0.0,
@@ -51,11 +51,8 @@ def save_trade(asset, direction, entry_price, stop_loss, take_profit, reasoning,
             json=data
         )
         if response.status_code in [200, 201]:
-            print(f"✅ Scalp-Trade gespeichert: {direction} {asset} | Ziel: ${target_price:.2f}")
             return True
-        else:
-            print(f"❌ Fehler beim Speichern: {response.status_code} - {response.text}")
-            return False
+        return False
     except Exception as e:
         print(f"❌ Exception beim Speichern: {e}")
         return False
