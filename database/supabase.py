@@ -64,3 +64,33 @@ def save_trade(asset, direction, entry_price, reasoning, status='PAPER'):
     except Exception as e:
         print(f"❌ Exception beim Speichern: {e}")
         return False
+
+def close_trade(asset, exit_price, pnl):
+    """Findet den aktiven Trade für das Asset und schließt ihn."""
+    try:
+        # 1. Aktiven Trade finden
+        trades = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id&Vermögenswert=eq.{asset}&Status=eq.ACTIVE",
+            headers=HEADERS
+        ).json()
+        
+        if not trades or len(trades) == 0:
+            return False
+            
+        trade_id = trades[0]['id']
+        
+        # 2. Update auf CLOSED setzen
+        data = {
+            "Status": "CLOSED",
+            "net_pnl": pnl
+            # Optional: "Austrittspreis" Spalte, falls du eine hast
+        }
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?id=eq.{trade_id}",
+            headers=HEADERS,
+            json=data
+        )
+        return response.status_code in [200, 201, 204]
+    except Exception as e:
+        print(f"❌ Fehler beim Schließen des Trades: {e}")
+        return False
