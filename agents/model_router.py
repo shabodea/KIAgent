@@ -12,34 +12,28 @@ class RateLimiter:
 
     def allow(self):
         now = time.time()
-        # Tokens auffüllen
         elapsed = now - self.last_refill
         self.tokens += elapsed * (self.max_requests / self.window_seconds)
         if self.tokens > self.max_requests:
             self.tokens = self.max_requests
         self.last_refill = now
-
         if self.tokens >= 1:
             self.tokens -= 1
             return True
         return False
 
 class ModelRouter:
-    """
-    Verteilt Anfragen auf verschiedene KI-Modelle mit Rate-Limiting.
-    """
     def __init__(self):
-        self.gemini_limiter = RateLimiter(max_requests=15, window_seconds=60)  # 15/60, sicherheitshalber unter 16
-        self.groq_limiter = RateLimiter(max_requests=50, window_seconds=60)    # Groq-Limit meist 50/min
-        self.deepseek_limiter = RateLimiter(max_requests=100, window_seconds=60) # OpenRouter meist generös
-
-        # API-Keys
+        self.gemini_limiter = RateLimiter(15, 60)
+        self.groq_limiter = RateLimiter(50, 60)
+        self.deepseek_limiter = RateLimiter(100, 60)
         self.gemini_key = GEMINI_API_KEY
         self.groq_key = GROQ_API_KEY
         self.openrouter_key = OPENROUTER_API_KEY
 
     def call_gemini(self, prompt, system_context=""):
-      url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key.strip()}"
+        # WICHTIG: Auf das großzügigere Modell umgestiegen
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key.strip()}"
         full_prompt = f"{system_context}\n\n{prompt}" if system_context else prompt
         payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
         try:
@@ -97,11 +91,6 @@ class ModelRouter:
             return None, str(e)
 
     def route(self, prompt, system_context="", preferred_model="gemini"):
-        """
-        Wählt das beste verfügbare Modell aus.
-        Reihenfolge: Zuerst das bevorzugte Modell, dann Fallback.
-        """
-        # 1. Versuche das bevorzugte Modell
         if preferred_model == "gemini" and self.gemini_limiter.allow() and self.gemini_key:
             answer, error = self.call_gemini(prompt, system_context)
             if answer is not None:
@@ -120,7 +109,6 @@ class ModelRouter:
                 return answer, "deepseek"
             print(f"⚠️ DeepSeek fehlgeschlagen: {error}")
 
-        # 2. Fallback: Versuche die anderen Modelle (in der Reihenfolge Gemini -> Groq -> DeepSeek)
         if self.gemini_limiter.allow() and self.gemini_key:
             answer, error = self.call_gemini(prompt, system_context)
             if answer is not None:
@@ -139,5 +127,4 @@ class ModelRouter:
                 return answer, "deepseek"
             print(f"⚠️ DeepSeek (Fallback) fehlgeschlagen: {error}")
 
-        # 3. Notfall: Rückgabe einer Standardantwort
         return "Alle KI-Modelle sind derzeit nicht verfügbar. Bitte später erneut versuchen.", "none"
