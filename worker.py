@@ -77,30 +77,34 @@ def get_entry_decision(market_data, balance):
     rsi_1h = calculate_rsi(market_data['closes_1h'])
     history = get_performance_summary(market_data['symbol'])
     
-    # EXTREM KURZER PROMPT (unter 200 Token)
+    # Wir fordern jetzt zusätzlich eine Prognose und Begründung an
     prompt = f"""
     {market_data['symbol']} {market_data['last']:.0f} | 5m RSI:{rsi_5m:.0f} 15m:{rsi_15m:.0f} 1h:{rsi_1h:.0f}
     Hist: {history}
-    Entscheide BUY/SELL/HOLD. JSON: {{"d":"BUY"/"SELL"/"HOLD","r":"...","sl":0,"tp":0}}
+    Entscheide BUY/SELL/HOLD. Wenn BUY oder SELL, gib auch einen erwarteten Kurs an (target price).
+    JSON: {{"d":"BUY"/"SELL"/"HOLD","r":"Begründung","sl":0,"tp":0,"target":0}}
     """
-    # Entscheidung über Gemini (schnell, kostenlos)
-    answer, _ = router.route(prompt, system_context="NUR JSON.", preferred_model="gemini")
+    answer, _ = router.route(prompt, system_context="NUR JSON.", preferred_model="deepseek")
     match = re.search(r'\{.*\}', answer, re.DOTALL)
     if match:
         try: return json.loads(match.group(0))
         except: pass
-    return {"d": "HOLD", "r": "Limit", "sl": 0.0, "tp": 0.0}
+    return {"d": "HOLD", "r": "Limit", "sl": 0.0, "tp": 0.0, "target": 0.0}
 
-def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning):
+def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning, target_price, hit):
     profit_text = "GEWINN" if pnl > 0 else "VERLUST"
-    prompt = f"Trade {asset} {profit_text} ${pnl:.2f}. Gib mir eine 1-Satz-Lektion für Scalping."
+    hit_text = "erreicht" if hit else "verfehlt"
+    prompt = f"""
+    Trade {asset} {profit_text} ${pnl:.2f}. 
+    Prognose: Kurs sollte {target_price} erreichen. Ergebnis: {hit_text}.
+    Gib mir eine kurze Lektion, warum ich falsch oder richtig lag, und was ich beim nächsten Mal besser machen kann.
+    """
     router = ModelRouter()
-    # Lektionen über Groq (weil wir die teuren Token nur fürs Lernen nutzen)
-    answer, _ = router.route(prompt, system_context="Du bist ein Coach.", preferred_model="groq")
+    answer, _ = router.route(prompt, system_context="Du bist ein Coach.", preferred_model="deepseek")
     send_chat_message("system", f"📘 Lektion: {answer}")
 
 def main_loop():
-    print("⚡ High-Frequency (15s pro Asset) – Gemini 2.0 + Groq + DeepSeek", flush=True)
+    print("⚡ DeepSeek-Only mit Prognose-Lernen (15s pro Asset).", flush=True)
     from agents.gemini_agent import GeminiCoreAgent
     agent = GeminiCoreAgent()
     last_chat_id = 0
@@ -120,28 +124,36 @@ def main_loop():
                 if not data: continue
                 
                 active_trades = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id,direction,Eintrittspreis&Vermögenswert=eq.{symbol}&Status=eq.ACTIVE",
+                    f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id,direction,Eintrittspreis,target_price&Vermögenswert=eq.{symbol}&Status=eq.ACTIVE",
                     headers=HEADERS
                 ).json()
                 
                 has_position = False
                 entry_price = 0.0
                 direction = "HOLD"
+                target_price = 0.0  # Erwarteter Kurs aus der Prognose
                 if isinstance(active_trades, list) and len(active_trades) > 0:
                     first_trade = active_trades[0]
                     if isinstance(first_trade, dict) and 'Eintrittspreis' in first_trade:
                         has_position = True
                         entry_price = float(first_trade['Eintrittspreis'])
                         direction = first_trade.get('direction', 'HOLD')
+                        target_price = float(first_trade.get('target_price', 0.0))
                 
                 rsi_5m = calculate_rsi(data['closes_5m'])
                 rsi_15m = calculate_rsi(data['closes_15m'])
                 
                 if has_position and (rsi_5m > 70 or rsi_15m > 70):
-                    pnl = (data['last'] - entry_price) / entry_price * margin_per_trade * 10
+                    exit_price = data['last']
+                    pnl = (exit_price - entry_price) / entry_price * margin_per_trade * 10
                     if direction == 'SELL': pnl *= -1
-                    close_trade(symbol, data['last'], pnl)
-                    analyze_learn(symbol, entry_price, data['last'], pnl, margin_per_trade, "Exit")
+                    # Prüfen, ob die Prognose eingetroffen ist
+                    if direction == 'BUY':
+                        hit = exit_price >= target_price
+                    else:  # SELL
+                        hit = exit_price <= target_price
+                    close_trade(symbol, exit_price, pnl)
+                    analyze_learn(symbol, entry_price, exit_price, pnl, margin_per_trade, "Exit", target_price, hit)
                     continue
                 
                 elif not has_position:
@@ -149,18 +161,20 @@ def main_loop():
                     last_api_call[symbol] = time.time()
                     
                     if decision['d'] in ['BUY', 'SELL']:
+                        target = decision.get('target', 0.0)
                         save_trade(
                             asset=symbol, 
                             direction=decision['d'],
                             entry_price=data['last'],
-                            stop_loss=decision.get('sl', 0.0),   # Jetzt korrekt: stop_loss
-                            take_profit=decision.get('tp', 0.0), # Korrekt: take_profit
+                            stop_loss=decision.get('sl', 0.0),
+                            take_profit=decision.get('tp', 0.0),
                             reasoning=decision.get('r', 'KI'),
                             indicators=f"5m RSI:{rsi_5m:.1f}",
                             expected_move='Scalp',
                             margin_usd=margin_per_trade,
                             leverage=10,
-                            status='ACTIVE'
+                            status='ACTIVE',
+                            target_price=target  # NEU: Speichern der Prognose
                         )
 
             if int(time.time()) % 15 == 0:
