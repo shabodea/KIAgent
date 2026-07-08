@@ -5,6 +5,7 @@ import time
 import ccxt
 import numpy as np
 import requests
+import random  # Wichtig für die Exploration
 from agents.model_router import ModelRouter
 from database.supabase import send_chat_message, save_trade, close_trade
 from config.settings import SUPABASE_URL, HEADERS
@@ -14,6 +15,9 @@ MONITORED_ASSETS = [
     "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
     "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "NIGHT-USD"  
 ]
+
+RISK_PERCENTAGE = 0.02  # 2% Risiko pro Trade (bei 10x Hebel = max 20% Verlust pro Trade)
+LEVERAGE = 10
 
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1: return 50
@@ -33,7 +37,7 @@ def get_current_balance():
         ).json()
         if isinstance(resp, list):
             total_pnl = sum(float(t.get('net_pnl', 0.0)) for t in resp)
-            return 200.0 + total_pnl
+            return max(200.0 + total_pnl, 10.0)  # Verhindert, dass er komplett auf 0 geht
         return 200.0
     except:
         return 200.0
@@ -58,93 +62,57 @@ def get_asset_data(symbol):
     except:
         return None
 
-def get_performance_summary(symbol):
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=net_pnl&Vermögenswert=eq.{symbol}&Status=eq.CLOSED&order=id.desc&limit=3",
-            headers=HEADERS
-        ).json()
-        if not isinstance(resp, list) or len(resp) == 0: return "No history."
-        wins = sum(1 for t in resp if t.get('net_pnl', 0.0) > 0)
-        return f"Win {wins}/{len(resp)} trades."
-    except:
-        return "History error."
-
 def get_entry_decision(market_data, balance):
     router = ModelRouter()
     rsi_5m = calculate_rsi(market_data['closes_5m'])
     rsi_15m = calculate_rsi(market_data['closes_15m'])
     rsi_1h = calculate_rsi(market_data['closes_1h'])
-    rsi_4h = calculate_rsi(market_data['closes_4h'])
-    rsi_1d = calculate_rsi(market_data['closes_1d'])
-    history = get_performance_summary(market_data['symbol'])
     
-    # WICHTIG: Scalping-Fokus & Gebühren-Bewusstsein
+    # 1. Frag DeepSeek nach einer Begründung und einem Kursziel
     prompt = f"""
-    {market_data['symbol']} {market_data['last']:.0f}. 
-    5m RSI:{rsi_5m:.0f}, 15m:{rsi_15m:.0f}, 1h:{rsi_1h:.0f}, 4h:{rsi_4h:.0f}, 1d:{rsi_1d:.0f}.
-    Hist: {history}.
-    
-    Ziel: Scalping. Kleine, schnelle Gewinne sammeln.
-    Wichtig: Kraken Taker-Gebühr beträgt 0.1%. Kalkuliere den Break-even. Handele nur, wenn die erwartete Bewegung die 0.1% Gebühr locker übersteigt.
-    
-    Entscheide BUY/SELL/HOLD. JSON: {{"d":"BUY"/"SELL"/"HOLD","r":"Begründung in 2 Sätzen","sl":0,"tp":0,"target":0}}
+    {market_data['symbol']} | Kurs: {market_data['last']} | RSI 5m:{rsi_5m:.1f} 15m:{rsi_15m:.1f} 1h:{rsi_1h:.1f}
+    Ich bin im ML-Explorationsmodus. Entscheide, ob ich jetzt kaufen oder verkaufen soll.
+    JSON: {{"d":"BUY"/"SELL","r":"Begründung","sl":0,"tp":0,"target":0}}
     """
-    answer, _ = router.route(prompt, system_context="NUR JSON. Max 50 Token Antwort.", preferred_model="deepseek")
+    answer, _ = router.route(prompt, system_context="NUR JSON.", preferred_model="deepseek")
     match = re.search(r'\{.*\}', answer, re.DOTALL)
+    
+    decision = {"d": "BUY", "r": "Standard-Exploration", "sl": 0.0, "tp": 0.0, "target": 0.0}
     if match:
-        try: return json.loads(match.group(0))
-        except: pass
-    return {"d": "HOLD", "r": "Limit", "sl": 0.0, "tp": 0.0, "target": 0.0}
+        try: 
+            decision = json.loads(match.group(0))
+        except: 
+            pass
 
-def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning, target_price, hit):
+    # 2. EXPLORATION OVERRIDE (Entscheidend für ML)
+    # Wenn DeepSeek eine klare Richtung gab, nutzen wir sie. Wenn nicht, würfeln wir!
+    if decision['d'] not in ['BUY', 'SELL']:
+        # Echter Zufalls-ML-Modus! Wir zwingen eine Entscheidung.
+        decision['d'] = random.choice(['BUY', 'SELL'])
+        decision['r'] = f"ML-Exploration: Zufallsentscheidung ({decision['d']}) um Daten zu sammeln."
+    
+    # Setze ein Ziel, wenn DeepSeek keins gesetzt hat
+    if decision.get('target', 0.0) == 0.0:
+        if decision['d'] == 'BUY':
+            decision['target'] = market_data['last'] * 1.003  # 0.3% Gewinn
+        else:
+            decision['target'] = market_data['last'] * 0.997  # 0.3% Gewinn
+            
+    return decision
+
+def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning, rsi_5m, rsi_15m, rsi_1h):
     profit_text = "GEWINN" if pnl > 0 else "VERLUST"
-    hit_text = "erreicht" if hit else "verfehlt"
     prompt = f"""
-    Trade {asset} {profit_text} ${pnl:.2f}. 
-    Prognose: Kurs sollte {target_price} erreichen. Ergebnis: {hit_text}.
-    Ist die 0.1% Gebühr schuld am kleinen Verlust? 
-    Gib mir 1 Satz Lektion für meine Scalping-Strategie.
+    Trade {asset} {profit_text} ${pnl:.2f}.
+    Gewinn/Verlust bei RSI 5m:{rsi_5m:.1f}, 15m:{rsi_15m:.1f}, 1h:{rsi_1h:.1f}.
+    Lehre mich, welche RSI-Bereiche für dieses Asset profitabel sind.
     """
     router = ModelRouter()
-    answer, _ = router.route(prompt, system_context="Du bist ein Coach.", preferred_model="deepseek")
-    send_chat_message("system", f"📘 Lektion: {answer}")
-def trigger_self_review(asset):
-    """
-    Der Bot analysiert seine letzten 10 Trades, lernt daraus und sagt dir Bescheid.
-    """
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=direction,net_pnl,Begründung,target_price,Austrittspreis&Vermögenswert=eq.{asset}&Status=eq.CLOSED&order=id.desc&limit=10",
-            headers=HEADERS
-        ).json()
-        
-        if not isinstance(resp, list) or len(resp) == 0:
-            return
-
-        # DeepSeek analysiert seine eigenen Entscheidungen
-        prompt = f"""
-        Hier sind meine letzten 10 Trades auf {asset}: {str(resp)}.
-        
-        Aufgaben:
-        1. Analysiere, warum meine Gewinner gewonnen und meine Verlierer verloren haben.
-        2. Wenn ich mein Trading verbessern kann, sag mir genau, was ich tun soll.
-        3. Wenn du selbst eine Regel in deiner Logik (z.B. RSI-Grenzen) ändern kannst, sag mir, was du jetzt anders entscheiden wirst.
-        
-        Antworte in 2-3 Sätzen. Sag mir nur, was ich wissen muss.
-        """
-        
-        router = ModelRouter()
-        answer, _ = router.route(prompt, system_context="Du bist ein Analyst.", preferred_model="deepseek")
-        
-        # Wichtig: Der Bot sagt dir über den Chat, was er ändern wird!
-        send_chat_message("system", f"🤔 **SELBST-REFLEKTION zu {asset}:** {answer}")
-        
-    except Exception as e:
-        print(f"Fehler bei der Selbstreflexion: {e}")
+    answer, _ = router.route(prompt, system_context="Du bist ein ML-Data Scientist.", preferred_model="deepseek")
+    send_chat_message("system", f"📘 ML-Lektion: {answer}")
 
 def main_loop():
-    print("⚡ DeepSeek-Scalper aktiv (Gebührenbewusst, Small Profits). 15s pro Asset.", flush=True)
+    print("🧠 ML-EXPLORATION MODE: Keine starren Regeln! Bot lernt durch Zufall & DeepSeek.", flush=True)
     from agents.gemini_agent import GeminiCoreAgent
     agent = GeminiCoreAgent()
     last_chat_id = 0
@@ -154,7 +122,8 @@ def main_loop():
     while True:
         try:
             balance = get_current_balance()
-            margin_per_trade = balance * 0.10
+            # 2% Risiko, aber mit 10x Hebel. Maximaler Verlust pro Trade = 20% des Kontos.
+            margin_per_trade = balance * RISK_PERCENTAGE 
 
             for symbol in MONITORED_ASSETS:
                 if time.time() - last_api_call.get(symbol, 0) < COOLDOWN_TRADING:
@@ -182,20 +151,21 @@ def main_loop():
                 
                 rsi_5m = calculate_rsi(data['closes_5m'])
                 rsi_15m = calculate_rsi(data['closes_15m'])
+                rsi_1h = calculate_rsi(data['closes_1h'])
                 
-                if has_position and (rsi_5m > 70 or rsi_15m > 70):
+                # EXIT: Keine harten RSI-Grenzen mehr. Er verlässt sich auf Stop-Loss & Target.
+                # Aber: Ein Sicherheits-Exit, wenn der RSI komplett durchdreht (> 80 oder < 20).
+                if has_position and (rsi_5m > 80 or rsi_5m < 20):
                     exit_price = data['last']
-                    pnl = (exit_price - entry_price) / entry_price * margin_per_trade * 10
+                    pnl = (exit_price - entry_price) / entry_price * margin_per_trade * LEVERAGE
                     if direction == 'SELL': pnl *= -1
-                    # Prognose-Check
-                    if direction == 'BUY':
-                        hit = exit_price >= target_price
-                    else:
-                        hit = exit_price <= target_price
+                    # Check if target was hit
+                    hit = (exit_price >= target_price) if direction == 'BUY' else (exit_price <= target_price)
                     close_trade(symbol, exit_price, pnl)
-                    analyze_learn(symbol, entry_price, exit_price, pnl, margin_per_trade, "Exit", target_price, hit)
+                    analyze_learn(symbol, entry_price, exit_price, pnl, margin_per_trade, "Exit", rsi_5m, rsi_15m, rsi_1h)
                     continue
                 
+                # ENTRY: Jetzt erzwingt der Bot Trades, um zu lernen!
                 elif not has_position:
                     decision = get_entry_decision(data, balance)
                     last_api_call[symbol] = time.time()
@@ -208,11 +178,11 @@ def main_loop():
                             entry_price=data['last'],
                             stop_loss=decision.get('sl', 0.0),
                             take_profit=decision.get('tp', 0.0),
-                            reasoning=decision.get('r', 'Scalping'),
+                            reasoning=decision.get('r', 'ML-Exploration'),
                             indicators=f"5m:{rsi_5m:.1f}, 15m:{rsi_15m:.1f}, 1h:{rsi_1h:.1f}",
-                            expected_move='Scalp (Small Profit)',
+                            expected_move='Exploration',
                             margin_usd=margin_per_trade,
-                            leverage=10,
+                            leverage=LEVERAGE,
                             status='ACTIVE',
                             target_price=target
                         )
