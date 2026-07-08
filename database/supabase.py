@@ -35,18 +35,19 @@ def send_chat_message(role, content):
         print(f"❌ Fehler beim Senden der Chat-Nachricht: {e}")
         return False
 
-def save_trade(asset, direction, entry_price, reasoning, status='PAPER'):
-    """
-    Speichert eine Trading-Entscheidung in der Handelsgeschichte-Tabelle.
-    """
+def save_trade(asset, direction, entry_price, stop_loss=0.0, take_profit=0.0, reasoning="", indicators="", expected_move="", status='PAPER'):
     try:
         data = {
             "Vermögenswert": asset,
             "Richtung": direction,
             "Eintrittspreis": entry_price,
+            "Stop_Loss_Preis": stop_loss,
+            "Take_Profit_Preis": take_profit,
             "Begründung": reasoning,
+            "Indikatoren_Setup": indicators,
+            "Erwartete_Bewegung": expected_move,
             "Status": status,
-            "net_pnl": 0.0,  # bei Paper-Trading erstmal 0
+            "net_pnl": 0.0,
             "Marge in USD": 0.0,
             "Hebelwirkung": 1
         }
@@ -59,7 +60,7 @@ def save_trade(asset, direction, entry_price, reasoning, status='PAPER'):
             print(f"✅ Trade gespeichert: {direction} {asset} zu {entry_price}")
             return True
         else:
-            print(f"❌ Fehler beim Speichern des Trades: {response.status_code} - {response.text}")
+            print(f"❌ Fehler beim Speichern: {response.status_code} - {response.text}")
             return False
     except Exception as e:
         print(f"❌ Exception beim Speichern: {e}")
