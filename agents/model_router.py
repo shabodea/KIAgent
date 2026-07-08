@@ -23,21 +23,22 @@ class RateLimiter:
 
 class ModelRouter:
     def __init__(self):
-        self.gemini_limiter = RateLimiter(55, 60) # 55/60, damit Gemini nicht ganz ausgelastet wird
-        self.groq_limiter = RateLimiter(45, 60)   # 45/60 für Groq
+        self.gemini_limiter = RateLimiter(55, 60) # Gemini 2.0 ist schnell
+        self.groq_limiter = RateLimiter(45, 60)
         self.deepseek_limiter = RateLimiter(100, 60)
         self.gemini_key = GEMINI_API_KEY
         self.groq_key = GROQ_API_KEY
         self.openrouter_key = OPENROUTER_API_KEY
 
     def call_gemini(self, prompt, system_context=""):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key.strip()}"
+        # WICHTIG: Modell auf gemini-2.0-flash umgestellt (verfügbar und schnell)
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={self.gemini_key.strip()}"
         full_prompt = f"{system_context}\n\n{prompt}" if system_context else prompt
         try:
             resp = requests.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]}, timeout=10).json()
             if "error" in resp:
                 if "429" in str(resp) or "quota" in str(resp).lower():
-                    return None, "RATE_LIMIT" # Spezieller Code für Limits
+                    return None, "RATE_LIMIT"
                 return None, f"Gemini Fehler: {resp['error']['message']}"
             return resp['candidates'][0]['content']['parts'][0]['text'], None
         except Exception as e:
@@ -63,8 +64,14 @@ class ModelRouter:
         messages = []
         if system_context: messages.append({"role": "system", "content": system_context})
         messages.append({"role": "user", "content": prompt})
+        # WICHTIG: max_tokens auf 500 setzen, um Kosten zu sparen und den Guthaben-Fehler zu vermeiden
         try:
-            resp = requests.post(url, json={"model": "deepseek/deepseek-r1", "messages": messages, "temperature": 0.7}, timeout=10).json()
+            resp = requests.post(url, json={
+                "model": "deepseek/deepseek-r1",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 500  # <-- Entscheidend!
+            }, timeout=10).json()
             if "error" in resp:
                 return None, f"DeepSeek Fehler: {resp['error']['message']}"
             return resp['choices'][0]['message']['content'], None
@@ -72,9 +79,11 @@ class ModelRouter:
             return None, str(e)
 
     def route(self, prompt, system_context="", preferred_model="gemini"):
-        kus_models = [("gemini", self.gemini_limiter, self.gemini_key, self.call_gemini),
-                      ("groq", self.groq_limiter, self.groq_key, self.call_groq),
-                      ("deepseek", self.deepseek_limiter, self.openrouter_key, self.call_deepseek)]
+        kus_models = [
+            ("gemini", self.gemini_limiter, self.gemini_key, self.call_gemini),
+            ("groq", self.groq_limiter, self.groq_key, self.call_groq),
+            ("deepseek", self.deepseek_limiter, self.openrouter_key, self.call_deepseek)
+        ]
         
         # 1. Versuche das bevorzugte Modell
         for name, limiter, api_key, func in kus_models:
@@ -84,9 +93,9 @@ class ModelRouter:
                     if answer is not None:
                         return answer, name
                     elif error == "RATE_LIMIT":
-                        limiter.tokens = 0 # Hard-Reset, damit es weiterschaltet
+                        limiter.tokens = 0  # Hard-Reset
         
-        # 2. Durchlaufe alle anderen als Fallback
+        # 2. Fallback durch alle anderen
         for name, limiter, api_key, func in kus_models:
             if name != preferred_model and api_key:
                 if limiter.allow():
@@ -94,4 +103,4 @@ class ModelRouter:
                     if answer is not None:
                         return answer, name
         
-        return "Alle 3 KIs sind derzeit voll ausgelastet. Warte auf neues Limit.", "none"
+        return "Alle 3 KIs sind voll ausgelastet. Warte auf neues Limit.", "none"
