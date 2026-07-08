@@ -18,7 +18,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- KRAKEN-ASSETS (19 Stück) ---
 MONITORED_ASSETS = [
     "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRX-USD", 
     "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
@@ -26,63 +25,75 @@ MONITORED_ASSETS = [
 ]
 
 def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1: return 50
+    if len(prices) < period + 1:
+        return 50
     deltas = np.diff(prices)
     seed = deltas[:period+1]
     up = seed[seed >= 0].sum() / period
     down = -seed[seed < 0].sum() / period
-    if down == 0: return 100
+    if down == 0:
+        return 100
     rs = up / down
     return 100 - (100 / (1 + rs))
 
-# --- DATEN INKL. ORDERBUCH ABRUFEN ---
-@st.cache_data(ttl=15)
 def get_market_overview(assets):
+    """Holt Daten für alle Assets, gibt DataFrame zurück."""
     results = []
+    error_msg = None
     try:
         exchange = ccxt.kraken()
         for symbol in assets:
             ticker = exchange.fetch_ticker(symbol.replace("-", "/"))
-            orderbook = exchange.fetch_order_book(symbol.replace("-", "/"), limit=5)
+            # Orderbuch (optional) – hier deaktiviert, falls Fehler auftreten
+            # orderbook = exchange.fetch_order_book(symbol.replace("-", "/"), limit=5)
+            # best_bid = orderbook['bids'][0][0] if orderbook['bids'] else 0
+            # best_ask = orderbook['asks'][0][0] if orderbook['asks'] else 0
+            # orderbook_text = f"Unterstützung: ${best_bid:,.2f} | Widerstand: ${best_ask:,.2f}" if best_bid and best_ask else "Orderbuch lädt..."
             
-            # Orderbuch-Analyse (Unterstützung / Widerstand)
-            best_bid = orderbook['bids'][0][0] if orderbook['bids'] else 0
-            best_ask = orderbook['asks'][0][0] if orderbook['asks'] else 0
-            orderbook_text = f"Unterstützung: ${best_bid:,.2f} | Widerstand: ${best_ask:,.2f}" if best_bid and best_ask else "Orderbuch lädt..."
-
-            # Daten für 5 Zeitfenster holen
-            timeframes = ['5m', '15m', '1h', '4h', '1d']
             row = {
                 "Asset": symbol,
                 "Kurs": f"${ticker['last']:,.2f}",
-                "Orderbuch": orderbook_text
+                # "Orderbuch": orderbook_text  # vorerst auskommentiert
+                "Orderbuch": "N/A"  # Platzhalter
             }
             
-            for tf in timeframes:
-                ohlcv = exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe=tf, limit=50)
-                if not ohlcv: 
-                    row[f"{tf}_RSI"] = "N/A"
-                    row[f"{tf}_Sig"] = "N/A"
-                    continue
-                closes = [c[4] for c in ohlcv]
-                rsi = calculate_rsi(closes)
-                
-                if rsi < 30: sig = "LONG"
-                elif rsi > 70: sig = "SHORT"
-                else: sig = "WARTEN"
-                
-                row[f"{tf}_RSI"] = f"{rsi:.1f}"
-                row[f"{tf}_Sig"] = sig
+            for tf in ['5m', '15m', '1h', '4h', '1d']:
+                try:
+                    ohlcv = exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe=tf, limit=50)
+                    if not ohlcv:
+                        row[f"{tf}_RSI"] = "N/A"
+                        row[f"{tf}_Sig"] = "N/A"
+                        continue
+                    closes = [c[4] for c in ohlcv]
+                    rsi = calculate_rsi(closes)
+                    if rsi < 30:
+                        sig = "LONG"
+                    elif rsi > 70:
+                        sig = "SHORT"
+                    else:
+                        sig = "WARTEN"
+                    row[f"{tf}_RSI"] = f"{rsi:.1f}"
+                    row[f"{tf}_Sig"] = sig
+                except Exception as e:
+                    row[f"{tf}_RSI"] = "Fehler"
+                    row[f"{tf}_Sig"] = "Fehler"
             
             results.append(row)
     except Exception as e:
-        st.error(f"Fehler beim Abrufen der Marktdaten: {e}")
+        error_msg = str(e)
+        st.error(f"Fehler beim Abrufen der Marktdaten: {error_msg}")
+    
+    if error_msg:
+        st.warning("Daten konnten nicht vollständig geladen werden. Zeige Fehler an.")
+        # Rückgabe eines leeren DataFrames mit einer Info-Spalte
+        return pd.DataFrame({"Hinweis": ["Fehler beim Laden der Daten"]})
     
     return pd.DataFrame(results) if results else pd.DataFrame()
 
-# --- DATEN ABRUFEN ---
-trades, chat, risiko, knowledge = get_all_data_live()
+# Daten abrufen (ohne Cache, um Fehler sofort zu sehen)
 df_market = get_market_overview(MONITORED_ASSETS)
+
+trades, chat, risiko, knowledge = get_all_data_live()
 
 # --- METRIKEN ---
 guthaben = 200.0
@@ -92,8 +103,10 @@ if isinstance(trades, list) and len(trades) > 0:
         if isinstance(t, dict) and t.get("Status") == "CLOSED":
             pnl = float(t.get("net_pnl") or 0.0)
             guthaben += pnl
-            if pnl > 0: win_trades += 1
-            else: loss_trades += 1
+            if pnl > 0:
+                win_trades += 1
+            else:
+                loss_trades += 1
 total = win_trades + loss_trades
 win_rate = (win_trades / total * 100) if total > 0 else 0.0
 
@@ -106,28 +119,34 @@ col4.metric("⚡ Hebel", "10x FIX")
 st.markdown("---")
 st.subheader(f"🔥 Live-Übersicht: Signale, RSI & Orderbuch-Abpraller")
 
-# --- TABELLE MIT ALLEN DATEN & FARBEN ---
-if not df_market.empty:
+if df_market.empty:
+    st.info("Keine Marktdaten vorhanden. Prüfe die Verbindung zu Kraken oder die Asset-Liste.")
+else:
+    # Spalten umbenennen für bessere Anzeige
     def highlight_signals(val):
-        if "LONG" in str(val): return "background-color: #1a3b1a; color: #00ff66; font-weight: bold;"
-        elif "SHORT" in str(val): return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
-        elif "WARTEN" in str(val): return "background-color: #2a2a2a; color: #888888;"
+        if "LONG" in str(val):
+            return "background-color: #1a3b1a; color: #00ff66; font-weight: bold;"
+        elif "SHORT" in str(val):
+            return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
+        elif "WARTEN" in str(val):
+            return "background-color: #2a2a2a; color: #888888;"
         return ""
     
     signal_cols = [f"{tf}_Sig" for tf in ['5m', '15m', '1h', '4h', '1d']]
-    styled_df = df_market.style.map(highlight_signals, subset=signal_cols)
-    
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        hide_index=True,
-        height=600,
-        column_config={
-            "Orderbuch": st.column_config.TextColumn("Orderbuch (Stütze/Widerstand)")
-        }
-    )
-else:
-    st.info("Marktdaten werden geladen...")
+    try:
+        styled_df = df_market.style.map(highlight_signals, subset=signal_cols)
+        st.dataframe(
+            styled_df,
+            use_container_width=True,
+            hide_index=True,
+            height=600,
+            column_config={
+                "Orderbuch": st.column_config.TextColumn("Orderbuch (Stütze/Widerstand)")
+            }
+        )
+    except Exception as e:
+        st.error(f"Fehler beim Styling der Tabelle: {e}")
+        st.dataframe(df_market, use_container_width=True)
 
 st.markdown("---")
 
@@ -139,7 +158,8 @@ with left_col:
         sys_msgs = [m for m in chat if m.get("role") == "system"]
         if sys_msgs:
             st.markdown(f"<div style='background:#0c0d14; padding:15px; border-radius:8px; height:200px; overflow-y:scroll;'>{sys_msgs[-1].get('content', '')}</div>", unsafe_allow_html=True)
-        else: st.info("Der Bot denkt noch...")
+        else:
+            st.info("Der Bot denkt noch...")
 
     st.subheader("📊 Handelsplatz – Aktive Positionen")
     active = [t for t in trades if isinstance(t, dict) and t.get("Status") == "ACTIVE"] if isinstance(trades, list) else []
@@ -164,9 +184,12 @@ with right_col:
             for msg in reversed(sorted_chat):
                 role = msg.get("role")
                 content = msg.get("content", "")
-                if role == "system": st.markdown(f"<span style='color:#ffcc00;'>🧠 {content}</span>", unsafe_allow_html=True)
-                elif role == "user": st.markdown(f"<span style='color:#4da6ff;'>🧑‍💻 {content}</span>", unsafe_allow_html=True)
-                elif role == "assistant": st.markdown(f"<span style='color:#00ff66;'>🤖 {content}</span>", unsafe_allow_html=True)
+                if role == "system":
+                    st.markdown(f"<span style='color:#ffcc00;'>🧠 {content}</span>", unsafe_allow_html=True)
+                elif role == "user":
+                    st.markdown(f"<span style='color:#4da6ff;'>🧑‍💻 {content}</span>", unsafe_allow_html=True)
+                elif role == "assistant":
+                    st.markdown(f"<span style='color:#00ff66;'>🤖 {content}</span>", unsafe_allow_html=True)
 
 st.markdown("---")
 prompt = st.chat_input("Befehl an den Broker...", key="broker_input")
@@ -179,5 +202,6 @@ if prompt:
 with st.sidebar:
     st.header("🧠 KI-Gedächtnis")
     if isinstance(knowledge, list) and len(knowledge) > 0:
-        for k in knowledge: st.caption(f"📌 **{k.get('kategorie')}**: {k.get('inhalt')}")
+        for k in knowledge:
+            st.caption(f"📌 **{k.get('kategorie')}**: {k.get('inhalt')}")
     st.caption("⚙️ Status: LIVE | 10x Hebel | 19 Assets")
