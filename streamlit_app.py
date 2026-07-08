@@ -37,26 +37,17 @@ def calculate_rsi(prices, period=14):
     return 100 - (100 / (1 + rs))
 
 def get_market_overview(assets):
-    """Holt Daten für alle Assets, gibt DataFrame zurück."""
     results = []
     error_msg = None
     try:
         exchange = ccxt.kraken()
         for symbol in assets:
             ticker = exchange.fetch_ticker(symbol.replace("-", "/"))
-            # Orderbuch (optional) – hier deaktiviert, falls Fehler auftreten
-            # orderbook = exchange.fetch_order_book(symbol.replace("-", "/"), limit=5)
-            # best_bid = orderbook['bids'][0][0] if orderbook['bids'] else 0
-            # best_ask = orderbook['asks'][0][0] if orderbook['asks'] else 0
-            # orderbook_text = f"Unterstützung: ${best_bid:,.2f} | Widerstand: ${best_ask:,.2f}" if best_bid and best_ask else "Orderbuch lädt..."
-            
             row = {
                 "Asset": symbol,
                 "Kurs": f"${ticker['last']:,.2f}",
-                # "Orderbuch": orderbook_text  # vorerst auskommentiert
-                "Orderbuch": "N/A"  # Platzhalter
+                "Orderbuch": "N/A"
             }
-            
             for tf in ['5m', '15m', '1h', '4h', '1d']:
                 try:
                     ohlcv = exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe=tf, limit=50)
@@ -77,20 +68,15 @@ def get_market_overview(assets):
                 except Exception as e:
                     row[f"{tf}_RSI"] = "Fehler"
                     row[f"{tf}_Sig"] = "Fehler"
-            
             results.append(row)
     except Exception as e:
         error_msg = str(e)
         st.error(f"Fehler beim Abrufen der Marktdaten: {error_msg}")
-    
     if error_msg:
-        st.warning("Daten konnten nicht vollständig geladen werden. Zeige Fehler an.")
-        # Rückgabe eines leeren DataFrames mit einer Info-Spalte
+        st.warning("Daten konnten nicht vollständig geladen werden.")
         return pd.DataFrame({"Hinweis": ["Fehler beim Laden der Daten"]})
-    
     return pd.DataFrame(results) if results else pd.DataFrame()
 
-# Daten abrufen (ohne Cache, um Fehler sofort zu sehen)
 df_market = get_market_overview(MONITORED_ASSETS)
 
 trades, chat, risiko, knowledge = get_all_data_live()
@@ -122,31 +108,36 @@ st.subheader(f"🔥 Live-Übersicht: Signale, RSI & Orderbuch-Abpraller")
 if df_market.empty:
     st.info("Keine Marktdaten vorhanden. Prüfe die Verbindung zu Kraken oder die Asset-Liste.")
 else:
-    # Spalten umbenennen für bessere Anzeige
-    def highlight_signals(val):
-        if "LONG" in str(val):
-            return "background-color: #1a3b1a; color: #00ff66; font-weight: bold;"
-        elif "SHORT" in str(val):
-            return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
-        elif "WARTEN" in str(val):
-            return "background-color: #2a2a2a; color: #888888;"
-        return ""
-    
+    # Bestimme welche Signal-Spalten tatsächlich existieren
     signal_cols = [f"{tf}_Sig" for tf in ['5m', '15m', '1h', '4h', '1d']]
-    try:
-        styled_df = df_market.style.map(highlight_signals, subset=signal_cols)
-        st.dataframe(
-            styled_df,
-            use_container_width=True,
-            hide_index=True,
-            height=600,
-            column_config={
-                "Orderbuch": st.column_config.TextColumn("Orderbuch (Stütze/Widerstand)")
-            }
-        )
-    except Exception as e:
-        st.error(f"Fehler beim Styling der Tabelle: {e}")
+    existing_signal_cols = [col for col in signal_cols if col in df_market.columns]
+    
+    if not existing_signal_cols:
+        st.warning("Keine Signal-Spalten gefunden. Zeige Rohdaten.")
         st.dataframe(df_market, use_container_width=True)
+    else:
+        def highlight_signals(val):
+            if "LONG" in str(val):
+                return "background-color: #1a3b1a; color: #00ff66; font-weight: bold;"
+            elif "SHORT" in str(val):
+                return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
+            elif "WARTEN" in str(val):
+                return "background-color: #2a2a2a; color: #888888;"
+            return ""
+        try:
+            styled_df = df_market.style.map(highlight_signals, subset=existing_signal_cols)
+            st.dataframe(
+                styled_df,
+                use_container_width=True,
+                hide_index=True,
+                height=600,
+                column_config={
+                    "Orderbuch": st.column_config.TextColumn("Orderbuch (Stütze/Widerstand)")
+                }
+            )
+        except Exception as e:
+            st.error(f"Fehler beim Styling der Tabelle: {e}")
+            st.dataframe(df_market, use_container_width=True)
 
 st.markdown("---")
 
