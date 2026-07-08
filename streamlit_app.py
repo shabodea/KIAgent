@@ -1,159 +1,155 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-
-# --- MODULARE IMPORTS (STRICT TO ARCHITECTURE) ---
 from database.supabase import get_all_data_live, send_chat_message
 
-st.set_page_config(page_title="🦅 KI-Zentrale 10x", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="🦅 KI-Profi-Trading-Cockpit", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM CSS FÜR TRADING-LOOK ---
+# Custom CSS für Profi-Look
 st.markdown("""
     <style>
-    .metric-card { background-color: #1e222d; padding: 20px; border-radius: 8px; border-left: 4px solid #00ff66; margin-bottom: 15px; }
-    .explanation-text { color: #848e9c; font-size: 0.85rem; }
-    .log-box { background-color: #0c0d14; padding: 15px; border-radius: 5px; font-family: monospace; color: #00ff66; height: 180px; overflow-y: scroll; }
+    .metric-card { background-color: #1e222d; padding: 18px; border-radius: 10px; border-left: 5px solid #00ff66; margin-bottom: 15px; }
+    .metric-value { font-size: 1.6rem; font-weight: bold; color: #ffffff; }
+    .metric-label { color: #848e9c; font-size: 0.9rem; }
+    .thought-box { background-color: #0c0d14; padding: 20px; border-radius: 8px; border: 1px solid #333; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; height: 250px; overflow-y: scroll; margin-bottom: 20px; }
+    .step-item { margin-bottom: 8px; display: flex; gap: 10px; }
+    .step-num { color: #00ff66; font-weight: bold; }
+    .trade-table { font-size: 0.9rem; }
+    .chat-container { border: 1px solid #333; border-radius: 8px; padding: 10px; background-color: #0c0d14; height: 300px; overflow-y: scroll; margin-bottom: 10px; }
+    .system_msg { color: #ffcc00; }
+    .user_msg { color: #4da6ff; }
+    .assistant_msg { color: #00ff66; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🦅 KI-BROKER EVALUATIONS-ZENTRALE")
-st.caption("Institutionelles Handelsmodell — Mathematische Echtzeit-Überwachung")
+st.title("🦅 KI-BROKER PROFESSIONAL COCKPIT")
+st.caption("Autonomer KI-Trading-Agent 24/7 – Echtzeit-Denkprotokoll & Paper-Trading")
 
-# --- SÄULE 1: DATENSAMMLER (NUN MODULAR ÜBER SUPABASE-MODUL) ---
+# --- DATEN ABRUFEN ---
 trades, chat, risiko, knowledge = get_all_data_live()
 
-# --- SÄULE 3: MATHEMATISCHE SELBSTBEWERTUNG ---
+# --- 1. METRIKEN ---
 guthaben = 200.0
 win_trades = 0
 loss_trades = 0
-
 if isinstance(trades, list) and len(trades) > 0:
     for t in trades:
-        if not isinstance(t, dict): continue
-        if t.get("Status") == "CLOSED":
+        if isinstance(t, dict) and t.get("Status") == "CLOSED":
             pnl = float(t.get("net_pnl") or 0.0)
             guthaben += pnl
             if pnl > 0: win_trades += 1
             else: loss_trades += 1
-
 total_closed = win_trades + loss_trades
 win_rate = (win_trades / total_closed * 100) if total_closed > 0 else 0.0
 
-# --- SÄULE 4: RISK-MANAGEMENT METRIKEN ---
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric("💰 Depot-Wert", f"${guthaben:.2f}")
-    st.markdown("<p class='explanation-text'>Dein aktuelles Gesamtkapital im System.</p>", unsafe_allow_html=True)
-with m2:
-    st.metric("📊 Trefferquote", f"{win_rate:.1f}%")
-    st.markdown("<p class='explanation-text'>Prozentualer Anteil der profitablen Trades.</p>", unsafe_allow_html=True)
-with m3:
-    st.metric("🛡️ Risiko-Status", "NORMAL" if guthaben > 180 else "CRITICAL")
-    st.markdown("<p class='explanation-text'>Überwachung des Gesamtrisikos.</p>", unsafe_allow_html=True)
-with m4:
-    tages_status = risiko[0].get("status") if isinstance(risiko, list) and len(risiko) > 0 else "OPEN"
-    st.metric("⚡ Tages-Schutzschild", tages_status)
-    st.markdown("<p class='explanation-text'>Sperrt das System bei hohem Tagesverlust.</p>", unsafe_allow_html=True)
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("💰 Depotwert", f"${guthaben:.2f}", help="Aktuelles Gesamtkapital im Paper-Modus")
+col2.metric("📊 Trefferquote", f"{win_rate:.1f}%", help="Gewinnende Trades im Verhältnis zu Verlusten")
+col3.metric("🛡️ Risiko-Status", "NORMAL" if guthaben > 180 else "KRITISCH", help="Überwachung der Gesamtrisikolage")
+col4.metric("⚡ Schutzschild", risiko[0].get("status") if isinstance(risiko, list) and len(risiko) > 0 else "OFFEN", help="Sperrt Trades bei hohem Tagesverlust")
 
 st.markdown("---")
 
-# --- OBERFLÄCHE: LINKS PROTOKOLLE & RECHTS CHAT ---
-col_left, col_right = st.columns([1.3, 1])
+# --- 2. HAUPTLAYOUT: ZWEI SPALTEN ---
+left_col, right_col = st.columns([2, 1])
 
-with col_left:
-    st.subheader("📦 Aktive Positionen (Echtzeit-Muster)")
-    active_positions = [t for t in trades if isinstance(t, dict) and t.get("Status") == "ACTIVE"] if isinstance(trades, list) else []
-    
-    if len(active_positions) > 0:
-        for pos in active_positions:
-            with st.expander(f"🟢 MARKT-AUFTRAG: {pos.get('Vermögenswert')}", expanded=True):
+with left_col:
+    # --- BOT DENKPROTOKOLL ---
+    st.subheader("🧠 Live-Denkprotokoll des KI-Bots")
+    thought_container = st.container(height=260)
+    with thought_container:
+        # Suche nach der neuesten System-Nachricht (das sind die Gedanken des Bots)
+        bot_thoughts = []
+        if isinstance(chat, list):
+            # Filtere nur Systemnachrichten
+            system_msgs = [m for m in chat if m.get("role") == "system"]
+            if system_msgs:
+                last_thought = system_msgs[-1].get("content", "")
+                # Zeige die Gedanken strukturiert an, falls sie als Liste geschrieben wurden
+                st.markdown(f"<div class='thought-box'>{last_thought}</div>", unsafe_allow_html=True)
+            else:
+                st.info("🤖 Der Bot denkt gerade über die nächste Marktanalyse nach... (Noch keine Live-Gedanken verfügbar)")
+
+    # --- AKTIVE POSITIONEN ---
+    st.subheader("📊 Handelsplatz – Aktive Positionen")
+    active = [t for t in trades if isinstance(t, dict) and t.get("Status") == "ACTIVE"] if isinstance(trades, list) else []
+    if active:
+        for pos in active:
+            with st.expander(f"📈 {pos.get('Vermögenswert')} – {pos.get('Richtung')}", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Einstiegspreis", f"${pos.get('Eintrittspreis')}")
-                c2.metric("Marge (Einsatz)", f"${pos.get('Marge in USD')}")
-                c3.metric("Hebel", f"{pos.get('Hebelwirkung')}x")
+                c2.metric("Stop-Loss", f"${pos.get('Stop_Loss_Preis')}", delta_color="inverse")
+                c3.metric("Take-Profit", f"${pos.get('Take_Profit_Preis')}")
                 
-                st.markdown(f"**🎯 Take-Profit Ziel:** {pos.get('Take_Profit_Preis')}$ | **🛡️ Stop-Loss Schutz:** {pos.get('Stop_Loss_Preis')}$")
-                st.info(f"ℹ️ **Einfache Erklärung des Handelsmusters:**\n{pos.get('Begründung', 'Warte auf KI-Auswertung...')}")
-                st.caption(f"⚙️ **Technische Rohdaten:** {pos.get('Indikatoren_Setup')} | {pos.get('Erwartete_Bewegung')}")
+                # Laienverständliche Begründung
+                st.info(f"💡 **Warum hat der Bot diesen Trade eröffnet?**\n{pos.get('Begründung', 'Analyse läuft...')}")
+                st.caption(f"⚙️ Indikatoren: {pos.get('Indikatoren_Setup', 'Warte auf Daten')} | 🎯 Erwartete Bewegung: {pos.get('Erwartete_Bewegung', '–')}")
     else:
-        st.info("Der Broker wartet auf ein klares mathematisches Signal und positives Internet-Sentiment.")
+        st.success("✅ Keine offenen Positionen. Der Bot wartet geduldig auf ein profitables Setup.")
 
-    st.subheader("📜 Letzte Buchungen (Transaktions-Historie)")
-    if isinstance(trades, list) and len(trades) > 0:
-        df = pd.DataFrame(trades)
-        if "net_pnl" in df.columns:
-            st.dataframe(df[["Vermögenswert", "Richtung", "Eintrittspreis", "net_pnl", "Status"]].sort_index(ascending=False), use_container_width=True)
+    # --- LETZTE BUCHUNGEN ---
+    st.subheader("📜 Letzte abgeschlossene Trades")
+    closed = [t for t in trades if isinstance(t, dict) and t.get("Status") == "CLOSED"]
+    if closed:
+        df = pd.DataFrame(closed)
+        cols = ["Vermögenswert", "Richtung", "Eintrittspreis", "Take_Profit_Preis", "net_pnl", "Begründung"]
+        available_cols = [c for c in cols if c in df.columns]
+        st.dataframe(df[available_cols].sort_index(ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Noch keine abgeschlossenen Trades in der Historie.")
 
-    st.subheader("🖥️ Telemetrie-Protokoll")
-    st.markdown(f"""<div class="log-box">
-        [{datetime.now().strftime('%H:%M:%S')}] 📡 CCXT-Daten-Pipeline zu Kraken steht.<br>
-        [{datetime.now().strftime('%H:%M:%S')}] 🔢 Berechne ATR-Volatilität und mathematischen RSI...<br>
-        [{datetime.now().strftime('%H:%M:%S')}] 🌐 Gemini sammelt Sentiment-Analysen im Internet...
-    </div>""", unsafe_allow_html=True)
-
-with col_right:
-    st.subheader("💬 Taktischer Live-Diskurs")
-    chat_container = st.container(height=450)
+with right_col:
+    # --- TAKTISCHER LIVE-DISKURS ---
+    st.subheader("💬 Live-Diskurs")
+    chat_container = st.container(height=350)
     with chat_container:
-        if isinstance(chat, list) and len(chat) > 0 and isinstance(chat[0], dict):
-            for msg in sorted(chat, key=lambda x: x.get('id', 0) if isinstance(x, dict) else 0):
-                with st.chat_message(msg.get("role", "user")):
-                    st.write(msg.get("content", ""))
+        if isinstance(chat, list):
+            # Sortieren und anzeigen
+            sorted_chat = sorted(chat, key=lambda x: x.get('id', 0), reverse=True)[:10] # Zeige nur die letzten 10
+            for msg in reversed(sorted_chat):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                
+                if role == "system":
+                    st.markdown(f"<div class='system_msg'>🧠 <b>BOT-DENKEN:</b> {content}</div>", unsafe_allow_html=True)
+                elif role == "user":
+                    st.markdown(f"<div class='user_msg'>🧑‍💻 <b>Du:</b> {content}</div>", unsafe_allow_html=True)
+                elif role == "assistant":
+                    st.markdown(f"<div class='assistant_msg'>🤖 <b>Ki-Bot:</b> {content}</div>", unsafe_allow_html=True)
         else:
-            st.info("Noch keine Nachrichten im Verlauf. Schreibe deine erste Anweisung!")
+            st.info("Warte auf Konversation...")
 
+    # --- TELEMETRIE ---
+    st.markdown("#### 📡 System-Telemetrie")
+    st.markdown(f"""
+    <div style="background-color: #0c0d14; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 0.8rem; color: #888;">
+        [{datetime.now().strftime('%H:%M:%S')}] 🔗 Kraken-API verbunden<br>
+        [{datetime.now().strftime('%H:%M:%S')}] 🔢 Berechne RSI, MACD, ATR...<br>
+        [{datetime.now().strftime('%H:%M:%S')}] 📊 Prüfe Indikatoren-Setup...
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- 3. CHAT-EINGABE (GANZ UNTEN) ---
 st.markdown("---")
-
-# ==================================================
-# KI CHAT EINGABE
-# ==================================================
-
 st.subheader("⌨️ Taktische Befehlszeile")
-
-
-prompt = st.chat_input(
-    "Gib dem Broker eine Anweisung...",
-    key="unique_broker_chat_input_2026"
-)
-
-
+prompt = st.chat_input("Gib dem Broker eine Anweisung... (z.B. 'Prüfe das RSI-Signal für BTC')", key="broker_input_2026")
 if prompt:
-
-
-    st.write(
-        "📤 Sende Nachricht:",
-        prompt
-    )
-
-
-    success = send_chat_message(
-        "user",
-        prompt
-    )
-
-
+    success = send_chat_message("user", prompt)
     if success:
-
-        st.success(
-            "✅ Nachricht wurde an Supabase gesendet."
-        )
-
+        st.success("✅ Befehl an den KI-Bot gesendet.")
         st.cache_data.clear()
-
         st.rerun()
-
-
     else:
+        st.error("❌ Fehler beim Senden der Nachricht.")
 
-        st.error(
-            "❌ Supabase Speicherung fehlgeschlagen."
-        )
-
-# --- SIDEBAR: UNSTERBLICHES GEDÄCHTNIS ---
+# --- SIDEBAR: KI-GEDÄCHTNIS ---
 with st.sidebar:
     st.header("🧠 KI-Gedächtnis (Dauerspeicher)")
     if isinstance(knowledge, list) and len(knowledge) > 0:
         for k in knowledge:
-            st.caption(f"🛡️ **{k.get('kategorie')}**: {k.get('inhalt')}")
+            st.caption(f"📌 **{k.get('kategorie')}**: {k.get('inhalt')}")
     else:
-        st.caption("• Gedächtnis leer oder wird geladen...")
+        st.caption("Gedächtnis wird geladen...")
+        
+    st.markdown("---")
+    st.caption("⚙️ Systemstatus: **LIVE** | Modus: **Paper-Trading** | KI: **Groq**")
