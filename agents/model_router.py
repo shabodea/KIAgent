@@ -39,7 +39,7 @@ class ModelRouter:
         self.openrouter_key = OPENROUTER_API_KEY
 
     def call_gemini(self, prompt, system_context=""):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={self.gemini_key.strip()}"
+      url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key.strip()}"
         full_prompt = f"{system_context}\n\n{prompt}" if system_context else prompt
         payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
         try:
