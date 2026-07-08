@@ -24,9 +24,6 @@ def get_all_data_live():
         return [], [], [], []
 
 def send_chat_message(role, content):
-    """
-    Sendet eine neue Nachricht (user oder assistant) an die chat_messages Tabelle.
-    """
     try:
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/chat_messages", 
@@ -35,7 +32,7 @@ def send_chat_message(role, content):
         )
         return response.status_code in [200, 201]
     except Exception as e:
-        print(f"Fehler beim Senden der Chat-Nachricht: {e}")
+        print(f"❌ Fehler beim Senden der Chat-Nachricht: {e}")
         return False
 
 def save_trade(asset, direction, entry_price, reasoning, status='PAPER'):
