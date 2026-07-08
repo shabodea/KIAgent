@@ -77,13 +77,13 @@ def get_entry_decision(market_data, balance):
     rsi_1h = calculate_rsi(market_data['closes_1h'])
     history = get_performance_summary(market_data['symbol'])
     
-    # EXTREM KURZER PROMPT (Minimale Token) für Gemini, damit wir schnell sind!
+    # EXTREM KURZER PROMPT (unter 200 Token)
     prompt = f"""
-    {market_data['symbol']} {market_data['last']} | RSI 5m:{rsi_5m:.1f} 15m:{rsi_15m:.1f} 1h:{rsi_1h:.1f} | Hist:{history}.
-    Entscheide BUY, SELL oder HOLD. 
-    JSON: {{"d":"BUY"/"SELL"/"HOLD","r":"Kurze Begründung","sl":0.0,"tp":0.0}}
+    {market_data['symbol']} {market_data['last']:.0f} | 5m RSI:{rsi_5m:.0f} 15m:{rsi_15m:.0f} 1h:{rsi_1h:.0f}
+    Hist: {history}
+    Entscheide BUY/SELL/HOLD. JSON: {{"d":"BUY"/"SELL"/"HOLD","r":"...","sl":0,"tp":0}}
     """
-    # Entscheidung läuft jetzt über GEMINI (Groq wird geschont)
+    # Entscheidung über Gemini (schnell, kostenlos)
     answer, _ = router.route(prompt, system_context="NUR JSON.", preferred_model="gemini")
     match = re.search(r'\{.*\}', answer, re.DOTALL)
     if match:
@@ -93,19 +93,19 @@ def get_entry_decision(market_data, balance):
 
 def analyze_learn(asset, entry_price, exit_price, pnl, margin, reasoning):
     profit_text = "GEWINN" if pnl > 0 else "VERLUST"
-    prompt = f"Trade {asset} {profit_text} ${pnl:.2f}. Lehre mich eine 1-Satz-Lektion fürs Scalping."
+    prompt = f"Trade {asset} {profit_text} ${pnl:.2f}. Gib mir eine 1-Satz-Lektion für Scalping."
     router = ModelRouter()
-    # Lektionen generiert GROQ (weil wir die teuren Token nur fürs Lernen nutzen)
+    # Lektionen über Groq (weil wir die teuren Token nur fürs Lernen nutzen)
     answer, _ = router.route(prompt, system_context="Du bist ein Coach.", preferred_model="groq")
     send_chat_message("system", f"📘 Lektion: {answer}")
 
 def main_loop():
-    print("⚡ High-Frequency Modus aktiv (15s pro Asset). Keine Limit-Bremsen mehr.", flush=True)
+    print("⚡ High-Frequency (15s pro Asset) – Gemini 2.0 + Groq + DeepSeek", flush=True)
     from agents.gemini_agent import GeminiCoreAgent
     agent = GeminiCoreAgent()
     last_chat_id = 0
     last_api_call = {asset: 0 for asset in MONITORED_ASSETS}
-    COOLDOWN_TRADING = 15  # Nur 15 Sekunden warten, dann wieder checken!
+    COOLDOWN_TRADING = 15
 
     while True:
         try:
@@ -150,18 +150,24 @@ def main_loop():
                     
                     if decision['d'] in ['BUY', 'SELL']:
                         save_trade(
-                            asset=symbol, direction=decision['d'],
-                            entry_price=data['last'], sl=decision.get('sl', 0.0),
-                            tp=decision.get('tp', 0.0), reasoning=decision.get('r', 'KI'),
+                            asset=symbol, 
+                            direction=decision['d'],
+                            entry_price=data['last'],
+                            stop_loss=decision.get('sl', 0.0),   # Jetzt korrekt: stop_loss
+                            take_profit=decision.get('tp', 0.0), # Korrekt: take_profit
+                            reasoning=decision.get('r', 'KI'),
                             indicators=f"5m RSI:{rsi_5m:.1f}",
-                            expected_move='Scalp', margin_usd=margin_per_trade, leverage=10, status='ACTIVE'
+                            expected_move='Scalp',
+                            margin_usd=margin_per_trade,
+                            leverage=10,
+                            status='ACTIVE'
                         )
 
-            if int(time.time()) % 15 == 0:  # Chat schneller abrufen
+            if int(time.time()) % 15 == 0:
                 new_id = agent.process_live_chat(last_chat_id)
                 if new_id is not None: last_chat_id = new_id
 
-            time.sleep(2)  # Hauptschleife ist extrem flüssig
+            time.sleep(2)
         except Exception as e:
             print(f"❌ Fehler im Hauptloop: {e}", flush=True)
             time.sleep(30)
