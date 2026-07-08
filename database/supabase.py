@@ -43,7 +43,7 @@ def save_trade(asset, direction, entry_price, stop_loss, take_profit, reasoning,
             "net_pnl": 0.0,
             "Marge in USD": margin_usd,
             "Hebelwirkung": leverage,
-            "target_price": target_price  # <-- NEU
+            "target_price": target_price
         }
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/Handelsgeschichte",
@@ -51,7 +51,7 @@ def save_trade(asset, direction, entry_price, stop_loss, take_profit, reasoning,
             json=data
         )
         if response.status_code in [200, 201]:
-            print(f"✅ Trade gespeichert: {direction} {asset} mit Prognose ${target_price:.2f}")
+            print(f"✅ Scalp-Trade gespeichert: {direction} {asset} | Ziel: ${target_price:.2f}")
             return True
         else:
             print(f"❌ Fehler beim Speichern: {response.status_code} - {response.text}")
