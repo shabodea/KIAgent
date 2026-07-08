@@ -18,15 +18,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- AKTUALISIERTE ASSET-LISTE (INKL. TAO & MIDNIGHT) ---
 MONITORED_ASSETS = [
     "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRON-USD", 
     "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
     "CHAINLINK-USD", "SUI-USD", "NILLION-USD", "TAO-USD", "MIDNIGHT-USD", 
     "SPCE", "GOOGL", "NVDA", "MRVL", "ORCL"
 ]
-
 TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
 
+# --- HELFER: RSI BERECHNEN ---
 def calculate_rsi(prices, period=14):
     if len(prices) < period + 1: return 50
     deltas = np.diff(prices)
@@ -37,15 +38,18 @@ def calculate_rsi(prices, period=14):
     rs = up / down
     return 100 - (100 / (1 + rs))
 
+# --- ROBUSTE DATENABFRAGE (AKTIEN + KRYPTO) ---
 def fetch_data_robust(symbol, tf):
-    # AKTIEN (Fallback: 5m -> 15m -> 1h)
+    # Aktien (mit 3-stufigem Fallback)
     if symbol in ["SPCE", "GOOGL", "NVDA", "MRVL", "ORCL"]:
         try:
-            # Versuche 5m
-            data = yf.download(symbol, period="2d", interval=tf, progress=False)
-            if data.empty and tf != "1h":
-                # Falls 5m oder 15m leer -> nimm 1h als Notfall
-                data = yf.download(symbol, period="5d", interval="1h", progress=False)
+            data = yf.download(symbol, period="1d", interval=tf, progress=False)
+            if data.empty:
+                # Fallback: 5m -> 15m -> 1h
+                if tf == "5m":
+                    data = yf.download(symbol, period="1d", interval="15m", progress=False)
+                if data.empty:
+                    data = yf.download(symbol, period="5d", interval="1h", progress=False)
             if data.empty:
                 return None
             closes = data['Close'].tolist()
@@ -54,11 +58,13 @@ def fetch_data_robust(symbol, tf):
             return closes, volume, vol_prev
         except:
             return None
+    # Krypto (CCXT)
     else:
-        # KRYPTO (CCXT)
         try:
             exchange = ccxt.kraken()
+            # Aufpassen: TAO/USD ist auf Kraken verfügbar
             ohlcv = exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe=tf, limit=50)
+            if not ohlcv: return None
             closes = [c[4] for c in ohlcv]
             volume = ohlcv[-1][5]
             vol_prev = ohlcv[-2][5] if len(ohlcv) > 1 else volume
@@ -66,6 +72,7 @@ def fetch_data_robust(symbol, tf):
         except:
             return None
 
+# --- MARKTÜBERSICHT ZUSAMMENBAUEN ---
 @st.cache_data(ttl=30)
 def get_market_overview_multi_tf(assets):
     results = []
@@ -102,8 +109,10 @@ def get_market_overview_multi_tf(assets):
             continue
     return pd.DataFrame(results) if results else pd.DataFrame()
 
+# --- DATEN ABRUFEN ---
 trades, chat, risiko, knowledge = get_all_data_live()
 
+# --- METRIKEN ---
 guthaben = 200.0
 win_trades, loss_trades = 0, 0
 if isinstance(trades, list) and len(trades) > 0:
@@ -123,8 +132,9 @@ col3.metric("🛡️ Risiko-Status", "NORMAL" if guthaben > 180 else "KRITISCH")
 col4.metric("⚡ Schutzschild", risiko[0].get("status") if isinstance(risiko, list) and len(risiko) > 0 else "OFFEN")
 
 st.markdown("---")
-st.subheader(f"📊 Live-Marktübersicht ({len(MONITORED_ASSETS)} Assets)")
 
+# --- TABELLE ANZEIGEN ---
+st.subheader(f"📊 Live-Marktübersicht ({len(MONITORED_ASSETS)} Assets)")
 df_market = get_market_overview_multi_tf(MONITORED_ASSETS)
 
 if not df_market.empty:
@@ -140,9 +150,11 @@ if not df_market.empty:
         height=600
     )
 else:
-    st.info("Marktdaten werden geladen...")
+    st.info("Marktdaten werden geladen (bitte 1 Minute warten)...")
 
 st.markdown("---")
+
+# --- REST (GEDANKEN, HANDELSPLATZ, CHAT) ---
 left_col, right_col = st.columns([2, 1])
 with left_col:
     st.subheader("🧠 Live-Denkprotokoll")
@@ -194,4 +206,4 @@ with st.sidebar:
     st.header("🧠 KI-Gedächtnis")
     if isinstance(knowledge, list) and len(knowledge) > 0:
         for k in knowledge: st.caption(f"📌 **{k.get('kategorie')}**: {k.get('inhalt')}")
-    st.caption("⚙️ Status: LIVE | 24/7")
+    st.caption("⚙️ Status: LIVE | 24/7 | Multi-Asset")
