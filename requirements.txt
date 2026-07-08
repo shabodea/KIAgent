@@ -4,3 +4,4 @@ pandas
 ccxt
 openai
 requests
+groq
