@@ -1,19 +1,26 @@
-
 """
 Regelbasiertes Konfluenz-Signal.
 Ersetzt den Zustand, in dem der Bot beim Nicht-Antworten der KI
 random.choice(['BUY','SELL']) gewuerfelt hat.
+
+Gibt zusaetzlich den rohen Score zurueck (nicht nur BUY/SELL/HOLD), damit
+der Worker bei schwachen Signalen bewusst "explorieren" kann (siehe worker.py).
 """
 from market_data.indicators import rsi_wilder, pattern_score
+
+# Ab diesem Score gilt ein Signal als stark genug fuer eine reguläre Position.
+DECISION_THRESHOLD = 2.0
+MAX_SCORE = 4.0
 
 
 def confluence_signal(df_1h, df_15m):
     """
     Kombiniert RSI (1h + 15m) mit Kerzenmuster-Score der 15m-Kerze
-    zu einer deterministischen Entscheidung + Konfidenz (0-1).
+    zu einer deterministischen Entscheidung + Konfidenz (0-1) + rohem Score.
     """
     if len(df_1h) < 20 or len(df_15m) < 20:
-        return {"direction": "HOLD", "confidence": 0.0, "reasons": ["zu wenig Daten"]}
+        return {"direction": "HOLD", "confidence": 0.0, "reasons": ["zu wenig Daten"],
+                "score": 0.0, "rsi_1h": 50.0, "rsi_15m": 50.0}
 
     rsi_1h = rsi_wilder(df_1h["close"]).iloc[-1]
     rsi_15m = rsi_wilder(df_15m["close"]).iloc[-1]
@@ -37,16 +44,17 @@ def confluence_signal(df_1h, df_15m):
     elif pscore < 0:
         score += 2 * pscore; reasons.append("baerisches Kerzenmuster")
 
-    if score >= 2:
+    if score >= DECISION_THRESHOLD:
         direction = "BUY"
-    elif score <= -2:
+    elif score <= -DECISION_THRESHOLD:
         direction = "SELL"
     else:
         direction = "HOLD"
 
-    confidence = min(abs(score) / 4.0, 1.0)
+    confidence = min(abs(score) / MAX_SCORE, 1.0)
     if not reasons:
         reasons = ["keine klare Konfluenz"]
 
     return {"direction": direction, "confidence": round(confidence, 2), "reasons": reasons,
+            "score": round(float(score), 2),
             "rsi_1h": round(float(rsi_1h), 2), "rsi_15m": round(float(rsi_15m), 2)}
