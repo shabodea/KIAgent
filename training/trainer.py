@@ -1,10 +1,7 @@
-
 """
 Trainiert ein einfaches Modell (Logistische Regression) aus der bisherigen
 Trade-Historie: Welche RSI/Muster/Konfidenz-Konstellationen fuehrten zu
-Gewinn vs. Verlust? Das ist die eigentliche Selbstlern-Komponente, die
-vorher komplett fehlte (nur Text-"Lektionen" wurden geloggt, aber nie
-in zukuenftige Entscheidungen zurueckgespielt).
+Gewinn vs. Verlust?
 
 WICHTIG: Render loescht das lokale Dateisystem bei jedem Neustart/Deploy.
 Deshalb werden die Modell-Koeffizienten NICHT als Datei, sondern als JSON
@@ -18,6 +15,7 @@ from memory.experience_memory import load_training_set
 
 FEATURE_KEYS = ["rsi_1h", "rsi_15m", "pattern_score", "confidence"]
 MIN_TRADES_TO_TRAIN = 30
+TIMEOUT = 15
 
 
 def retrain_model_from_history():
@@ -56,14 +54,14 @@ def retrain_model_from_history():
 def save_model_coefficients(coeffs: dict):
     try:
         existing = requests.get(
-            f"{SUPABASE_URL}/rest/v1/system_knowledge?kategorie=eq.ml_model", headers=HEADERS
+            f"{SUPABASE_URL}/rest/v1/system_knowledge?kategorie=eq.ml_model", headers=HEADERS, timeout=TIMEOUT
         ).json()
         payload = {"kategorie": "ml_model", "inhalt": json.dumps(coeffs)}
         if isinstance(existing, list) and existing:
             row_id = existing[0]["id"]
-            requests.patch(f"{SUPABASE_URL}/rest/v1/system_knowledge?id=eq.{row_id}", headers=HEADERS, json=payload)
+            requests.patch(f"{SUPABASE_URL}/rest/v1/system_knowledge?id=eq.{row_id}", headers=HEADERS, json=payload, timeout=TIMEOUT)
         else:
-            requests.post(f"{SUPABASE_URL}/rest/v1/system_knowledge", headers=HEADERS, json=payload)
+            requests.post(f"{SUPABASE_URL}/rest/v1/system_knowledge", headers=HEADERS, json=payload, timeout=TIMEOUT)
     except Exception as e:
         print(f"⚠️ Modell speichern fehlgeschlagen: {e}")
 
@@ -71,7 +69,7 @@ def save_model_coefficients(coeffs: dict):
 def load_model_coefficients():
     try:
         rows = requests.get(
-            f"{SUPABASE_URL}/rest/v1/system_knowledge?kategorie=eq.ml_model", headers=HEADERS
+            f"{SUPABASE_URL}/rest/v1/system_knowledge?kategorie=eq.ml_model", headers=HEADERS, timeout=TIMEOUT
         ).json()
         if isinstance(rows, list) and rows:
             return json.loads(rows[0]["inhalt"])
