@@ -36,6 +36,8 @@ def save_trade(asset, direction, entry_price, stop_loss, take_profit, reasoning,
             "Status": status, "net_pnl": 0.0, "Marge in USD": margin_usd, "Hebelwirkung": leverage, "target_price": target_price
         }
         response = requests.post(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte", headers=HEADERS, json=data, timeout=TIMEOUT)
+        if response.status_code not in (200, 201):
+            print(f"⚠️ Trade speichern ({asset}) HTTP {response.status_code}: {response.text[:200]}")
         return response.status_code in [200, 201]
     except Exception as e:
         print(f"❌ Fehler beim Speichern: {e}"); return False
@@ -47,6 +49,8 @@ def close_trade(asset, exit_price, pnl):
         trade_id = trades[0]['id']
         data = {"Status": "CLOSED", "net_pnl": pnl, "Austrittspreis": exit_price}
         response = requests.patch(f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?id=eq.{trade_id}", headers=HEADERS, json=data, timeout=TIMEOUT)
+        if response.status_code not in (200, 201, 204):
+            print(f"⚠️ Trade schließen ({asset}) HTTP {response.status_code}: {response.text[:200]}")
         return response.status_code in [200, 201, 204]
     except Exception as e:
         print(f"❌ Fehler beim Schließen: {e}"); return False
