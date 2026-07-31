@@ -46,3 +46,60 @@ def close_trade(asset, exit_price, pnl):
         return response.status_code in [200, 201, 204]
     except Exception as e:
         print(f"❌ Fehler beim Schließen: {e}"); return False
+
+
+def get_current_balance_and_winrate(base_balance=100.0, lookback=200):
+    """Gibt (virtuelle Balance, Trefferquote, Anzahl geschlossener Trades) zurueck."""
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=net_pnl&Status=eq.CLOSED&order=id.desc&limit={lookback}",
+            headers=HEADERS
+        ).json()
+        if not isinstance(resp, list):
+            return base_balance, 0.5, 0
+        wins = sum(1 for t in resp if t.get('net_pnl', 0.0) > 0)
+        total = len(resp)
+        winrate = wins / total if total > 0 else 0.5
+        total_pnl = sum(float(t.get('net_pnl', 0.0)) for t in resp)
+        return max(base_balance + total_pnl, 10.0), winrate, total
+    except Exception as e:
+        print(f"❌ Balance/Winrate-Fehler: {e}"); return base_balance, 0.5, 0
+
+
+def get_bot_thoughts(limit=25):
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bot_thoughts?select=*&order=id.desc&limit={limit}", headers=HEADERS
+        ).json()
+        return resp if isinstance(resp, list) else []
+    except Exception as e:
+        print(f"❌ Denkprotokoll laden fehlgeschlagen: {e}"); return []
+
+
+def log_thought(symbol, direction, confidence, reasons, ai_comment=""):
+    """Schreibt JEDE Analyse (auch HOLD) ins Denkprotokoll, damit das Dashboard zeigt,
+    was der Bot gerade prueft - nicht nur was er tatsaechlich tradet."""
+    try:
+        reasons_text = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+        requests.post(f"{SUPABASE_URL}/rest/v1/bot_thoughts", headers=HEADERS, json={
+            "symbol": symbol, "direction": direction, "confidence": confidence,
+            "reasons": reasons_text, "ai_comment": ai_comment
+        })
+    except Exception as e:
+        print(f"⚠️ Denkprotokoll-Log fehlgeschlagen: {e}")
+
+
+def check_and_notify_milestone(total_closed, winrate, threshold=0.70, min_trades=200):
+    """Meldet sich einmalig im Chat, sobald >= min_trades Trades UND Trefferquote >= threshold."""
+    if total_closed < min_trades or winrate < threshold:
+        return
+    try:
+        flag = requests.get(
+            f"{SUPABASE_URL}/rest/v1/system_knowledge?kategorie=eq.milestone_70", headers=HEADERS
+        ).json()
+        if isinstance(flag, list) and len(flag) == 0:
+            send_chat_message("system", f"🏆 Meilenstein erreicht: {winrate*100:.1f}% Trefferquote über {total_closed} Trades!")
+            requests.post(f"{SUPABASE_URL}/rest/v1/system_knowledge", headers=HEADERS,
+                          json={"kategorie": "milestone_70", "inhalt": str(winrate)})
+    except Exception as e:
+        print(f"⚠️ Meilenstein-Check fehlgeschlagen: {e}")
