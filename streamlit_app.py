@@ -8,10 +8,11 @@ for _k, _v in st.secrets.items():
     os.environ.setdefault(_k, str(_v))
 
 import pandas as pd
-from datetime import datetime
-import ccxt
-import numpy as np
-from database.supabase import get_all_data_live, send_chat_message, get_bot_thoughts
+from database.supabase import (
+    get_all_data_live, send_chat_message, get_bot_thoughts,
+    get_market_snapshot, get_current_balance_and_winrate,
+)
+from config.settings import MAX_TOTAL_BUDGET_USD
 
 st.set_page_config(page_title="🦅 KI-Learning-Cockpit", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -23,101 +24,94 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Vollständige Asset-Liste (19 Krypto-Assets auf Kraken) ---
-MONITORED_ASSETS = [
-    "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRX-USD", 
-    "PAXG-USD", "RENDER-USD", "FET-USD", "PEPE-USD", "QNT-USD", "WLD-USD", 
-    "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "NIGHT-USD"
-]
-
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1: return 50
-    deltas = np.diff(prices); seed = deltas[:period+1]
-    up = seed[seed >= 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    if down == 0: return 100
-    rs = up / down
-    return 100 - (100 / (1 + rs))
-
-@st.cache_data(ttl=15)
-def get_market_overview(assets):
-    results = []
-    try:
-        exchange = ccxt.kraken()
-        for symbol in assets:
-            ticker = exchange.fetch_ticker(symbol.replace("-", "/"))
-            row = {"Symbol": symbol, "Kurs (USD)": f"${ticker['last']:,.2f}"}
-            timeframes = ['5m', '15m', '1h', '4h', '1d']
-            for tf in timeframes:
-                try:
-                    ohlcv = exchange.fetch_ohlcv(symbol.replace("-", "/"), timeframe=tf, limit=50)
-                    if ohlcv:
-                        closes = [c[4] for c in ohlcv]
-                        rsi_values = []
-                        for i in range(len(closes)):
-                            if i >= 14: rsi_values.append(calculate_rsi(closes[:i+1]))
-                        if len(rsi_values) >= 2:
-                            current_rsi = rsi_values[-1]
-                            prev_rsi = rsi_values[-2]
-                            trend = "⬆️" if current_rsi > prev_rsi else "⬇️"
-                        else: current_rsi, trend = 50, "➖"
-                        
-                        sig = "LONG" if current_rsi < 30 else ("SELL" if current_rsi > 70 else "HOLD")
-                        row[f"{tf}_RSI"] = f"{trend} {current_rsi:.1f}"
-                        row[f"{tf}_Sig"] = sig
-                    else:
-                        row[f"{tf}_RSI"] = "N/A"; row[f"{tf}_Sig"] = "N/A"
-                except: row[f"{tf}_RSI"] = "N/A"; row[f"{tf}_Sig"] = "N/A"
-            results.append(row)
-    except: pass
-    return pd.DataFrame(results) if results else pd.DataFrame()
-
+# --- Live-Daten laden (alles kommt aus Supabase, keine eigenen Kraken-Anfragen mehr) ---
 trades, chat, risiko, knowledge = get_all_data_live()
+balance, win_rate_frac, total_closed = get_current_balance_and_winrate(base_balance=MAX_TOTAL_BUDGET_USD)
+win_rate = win_rate_frac * 100
 
-guthaben = 200.0
-win_trades, loss_trades = 0, 0
-if isinstance(trades, list) and len(trades) > 0:
-    for t in trades:
-        if isinstance(t, dict) and t.get("Status") == "CLOSED":
-            pnl = float(t.get("net_pnl") or 0.0); guthaben += pnl
-            if pnl > 0: win_trades += 1
-            else: loss_trades += 1
-total = win_trades + loss_trades
-win_rate = (win_trades / total * 100) if total > 0 else 0.0
+exploration_trades = sum(
+    1 for t in trades if isinstance(t, dict) and "Exploration" in str(t.get("Erwartete_Bewegung", ""))
+)
 
-dynamic_risk = max(0.5, min(3.0, (2 * (win_rate / 100) - 1) * 5))
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 Depotwert", f"${guthaben:.2f}")
-col2.metric("📊 Trefferquote", f"{win_rate:.1f}%")
-col3.metric("🛡️ Risiko-Status", "NORMAL" if guthaben > 180 else "KRITISCH")
-col4.metric("⚡ Dynamisches Risiko", f"{dynamic_risk:.1f}%", help="Prozentsatz des Guthabens pro Trade (0.5% - 3%)")
+dynamic_risk = max(0.5, min(3.0, (2 * win_rate_frac - 1) * 5))
+col1, col2, col3, col4, col5 = st.columns(5)
+col1.metric("💰 Depotwert", f"${balance:.2f}")
+col2.metric("📊 Trefferquote", f"{win_rate:.1f}%", help=f"Basis: letzte {total_closed} geschlossene Trades")
+col3.metric("🛡️ Risiko-Status", "NORMAL" if balance > MAX_TOTAL_BUDGET_USD * 0.9 else "KRITISCH")
+col4.metric("⚡ Dynamisches Risiko", f"{dynamic_risk:.1f}%", help="Prozentsatz des Guthabens pro regulärem Trade")
+col5.metric("🧪 Explorations-Trades", exploration_trades, help="Bewusst schwächere Signale, um mehr Trainingsdaten zu sammeln")
 st.markdown("---")
 
-st.subheader(f"📊 Live-Übersicht (Alle Assets & Signale)")
-df_market = get_market_overview(MONITORED_ASSETS)
-if not df_market.empty:
-    def highlight_cells(val):
+# --- PROFI-LIVE-ÜBERSICHT: für jedes Asset die aktuelle Einschätzung über alle Zeitfenster ---
+st.subheader("📊 Live-Marktübersicht: Halten / Kaufen (Long) / Verkaufen (Short)")
+snapshot = get_market_snapshot()
+
+if snapshot:
+    rows = []
+    for s in snapshot:
+        direction = s.get("direction", "HOLD")
+        label = {"BUY": "🟢 LONG", "SELL": "🔴 SHORT", "HOLD": "🟠 HALTEN"}.get(direction, direction)
+        conf = float(s.get("confidence") or 0.0)
+        rows.append({
+            "Asset": s.get("symbol"),
+            "Preis": f"${float(s.get('last_price') or 0):,.4f}",
+            "Signal": label,
+            "Konfidenz": conf,
+            "5m RSI": s.get("rsi_5m"),
+            "15m RSI": s.get("rsi_15m"),
+            "1h RSI": s.get("rsi_1h"),
+            "4h RSI": s.get("rsi_4h"),
+            "1d RSI": s.get("rsi_1d"),
+            "Begründung": s.get("reasons", ""),
+            "_sort": conf if direction != "HOLD" else -1,
+        })
+
+    df_live = pd.DataFrame(rows).sort_values("_sort", ascending=False).drop(columns=["_sort"])
+    df_live["Konfidenz"] = df_live["Konfidenz"].apply(lambda x: f"{x*100:.0f}%")
+
+    def highlight_signal(val):
         if "LONG" in str(val): return "background-color: #1a3b1a; color: #00ff66; font-weight: bold;"
-        elif "SELL" in str(val): return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
-        elif "HOLD" in str(val): return "background-color: #2a2a2a; color: #ffcc00; font-weight: bold;"
-        if "⬆️" in str(val): return "color: #00ff66; font-weight: bold;"
-        elif "⬇️" in str(val): return "color: #ff4d4d; font-weight: bold;"
-        elif "N/A" in str(val): return "color: #555555;"
+        if "SHORT" in str(val): return "background-color: #3b1a1a; color: #ff4d4d; font-weight: bold;"
+        if "HALTEN" in str(val): return "background-color: #2a2a2a; color: #ffcc00;"
         return ""
-    signal_cols = [f"{tf}_Sig" for tf in ['5m', '15m', '1h', '4h', '1d']]
-    rsi_cols = [f"{tf}_RSI" for tf in ['5m', '15m', '1h', '4h', '1d']]
-    styled_df = df_market.style.map(highlight_cells, subset=signal_cols + rsi_cols)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
-else: st.info("Marktdaten werden geladen...")
+
+    styled = df_live.style.map(highlight_signal, subset=["Signal"])
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=650)
+    st.caption("Sortiert nach Konfidenz. Diese Tabelle kommt direkt aus dem Worker (kein Live-Nachladen nötig) und aktualisiert sich bei jedem Seiten-Refresh.")
+else:
+    st.info("Noch keine Live-Übersicht vorhanden – der Worker schreibt sie bei der ersten Analyserunde (kann 1-2 Minuten nach dem Start dauern).")
+
 st.markdown("---")
 
 left_col, right_col = st.columns([2, 1])
 with left_col:
-    st.subheader("🧠 Selbst-Reflexion des Bots")
-    if isinstance(chat, list):
-        sys_msgs = [m for m in chat if m.get("role") == "system" and "📘" in m.get("content", "")]
-        if sys_msgs: st.info(sys_msgs[-1].get("content", ""))
-        else: st.write("Der Bot wertet gerade seine Trades aus...")
+    st.subheader("🧠 Denkprotokoll (letzte Analysen, chronologisch)")
+    thoughts = get_bot_thoughts(limit=20)
+    if thoughts:
+        for t in thoughts:
+            direction = t.get("direction", "HOLD")
+            color = {"BUY": "#00ff66", "SELL": "#ff4d4d", "HOLD": "#ffcc00"}.get(direction, "#ffffff")
+            conf = float(t.get("confidence") or 0.0)
+            st.markdown(
+                f"<span style='color:{color};'>**{t.get('symbol')}** → {direction} ({conf*100:.0f}%)</span> "
+                f"– {t.get('reasons','')}",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.write("Noch keine Einträge im Denkprotokoll.")
+
+    st.subheader("📈 Trefferquote-Verlauf")
+    closed_sorted = [t for t in trades if isinstance(t, dict) and t.get("Status") == "CLOSED"]
+    closed_sorted.sort(key=lambda x: x.get("id", 0))
+    if closed_sorted:
+        rolling, wins_running = [], 0
+        for i, t in enumerate(closed_sorted, start=1):
+            if float(t.get("net_pnl") or 0.0) > 0:
+                wins_running += 1
+            rolling.append(wins_running / i)
+        st.line_chart(rolling)
+    else:
+        st.info("Noch keine geschlossenen Trades für den Trefferquote-Verlauf.")
 
     st.subheader("📊 Aktive Positionen")
     active = [t for t in trades if isinstance(t, dict) and t.get("Status") == "ACTIVE"] if isinstance(trades, list) else []
@@ -129,10 +123,19 @@ with left_col:
                 c2.metric("Stop-Loss", f"${pos.get('Stop_Loss_Preis')}", delta_color="inverse")
                 c3.metric("Take-Profit", f"${pos.get('Take_Profit_Preis')}")
                 target = float(pos.get('target_price') or 0.0)
-                st.markdown(f"🎯 Erwartetes Kursziel: ${target:,.2f}")
-    else: st.success("✅ Keine offenen Positionen.")
+                st.markdown(f"🎯 Erwartetes Kursziel: ${target:,.2f} | Modus: {pos.get('Erwartete_Bewegung', '-')}")
+    else:
+        st.success("✅ Keine offenen Positionen.")
 
 with right_col:
+    st.subheader("🧠 Selbst-Reflexion des Bots")
+    if isinstance(chat, list):
+        sys_msgs = [m for m in chat if m.get("role") == "system" and "📘" in m.get("content", "")]
+        if sys_msgs:
+            st.info(sys_msgs[-1].get("content", ""))
+        else:
+            st.write("Der Bot wertet gerade seine Trades aus...")
+
     st.subheader("💬 Live-Diskurs")
     chat_container = st.container(height=400)
     with chat_container:
@@ -145,37 +148,9 @@ with right_col:
                 elif role == "assistant": st.markdown(f"<span style='color:#00ff66;'>🤖 {content}</span>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader("🧠 Live-Denkprotokoll (auch HOLD-Entscheidungen)")
-thoughts_resp = get_bot_thoughts(limit=25)
-if isinstance(thoughts_resp, list) and thoughts_resp:
-    for t in thoughts_resp:
-        color = "#00ff66" if t.get("direction") == "BUY" else ("#ff4d4d" if t.get("direction") == "SELL" else "#ffcc00")
-        st.markdown(
-            f"<span style='color:{color};'>**{t.get('symbol')}** → {t.get('direction')} "
-            f"(Konfidenz {float(t.get('confidence') or 0):.2f})</span> – {t.get('reasons','')}",
-            unsafe_allow_html=True,
-        )
-else:
-    st.info("Noch keine Eintraege im Denkprotokoll (Tabelle bot_thoughts pruefen).")
-
-st.subheader("📈 Trefferquote-Verlauf")
-closed_sorted = [t for t in trades if isinstance(t, dict) and t.get("Status") == "CLOSED"]
-closed_sorted.sort(key=lambda x: x.get("id", 0))
-if closed_sorted:
-    rolling = []
-    wins_running = 0
-    for i, t in enumerate(closed_sorted, start=1):
-        if float(t.get("net_pnl") or 0.0) > 0:
-            wins_running += 1
-        rolling.append(wins_running / i)
-    st.line_chart(rolling)
-else:
-    st.info("Noch keine geschlossenen Trades fuer den Trefferquote-Verlauf.")
-
-st.markdown("---")
 prompt = st.chat_input("Befehl an den Broker...", key="broker_input")
 if prompt:
     if send_chat_message("user", prompt):
         st.success("✅ Gesendet"); st.cache_data.clear(); st.rerun()
 
-st.caption("⚙️ Modus: Learning-Cockpit | 24/7 Selbstreflektion aktiv")
+st.caption("⚙️ Modus: Learning-Cockpit | 24/7 Analyse + Explorations-Modus aktiv")
