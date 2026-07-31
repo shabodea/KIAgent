@@ -1,22 +1,19 @@
 """
 KIAgent Worker - 24/7 Hintergrund-Triebwerk (laeuft auf Render).
 
-Aenderungen gegenueber der alten Version:
-- Kein random.choice(['BUY','SELL']) mehr als Fallback -> regelbasiertes
-  Konfluenz-Signal (RSI + Kerzenmuster) ist jetzt die primaere Entscheidung.
-- Das LLM wird nur noch zur Bestaetigung/Begruendung genutzt (kein
-  Rate-Limit-Stress mehr, kein Zufall).
-- Jede Analyse (auch HOLD) wird ins Denkprotokoll (bot_thoughts) geschrieben,
-  damit das Dashboard zeigt, was der Bot gerade prueft.
-- Der Live-Chat wird jetzt TATSAECHLICH verarbeitet (vorher toter Code:
-  agent.process_live_chat() wurde nie aufgerufen).
-- Alle 6h wird automatisch mit den bisherigen Trades nachtrainiert
-  (kein zusaetzlicher, kostenpflichtiger Render-Cron-Job noetig).
-- Meilenstein-Meldung, sobald >=200 Trades UND >=70% Trefferquote.
-- Eine einzige, wiederverwendete Kraken-Verbindung statt einer neuen
-  Instanz pro Symbol/Aufruf (vorher: Rate-Limit-Risiko bei Kraken).
+Neu in dieser Version:
+- Holt jetzt 5 Zeitfenster (5m/15m/1h/4h/1d) pro Asset und schreibt daraus
+  einen IMMER AKTUELLEN Snapshot (market_snapshot) fuer das Profi-Dashboard -
+  das Dashboard selbst braucht dadurch keine eigenen Kraken-Anfragen mehr.
+- Explorations-Modus: Da es reines Paper-Trading ist (kein echtes Kapital-
+  risiko) und der Bot moeglichst schnell Trainingsdaten sammeln soll, nimmt
+  er einen Teil der Grenzfaelle (klares Signal, aber unter der normalen
+  Schwelle) bewusst als kleinere "Explorations-Trades" mit, statt sie
+  komplett zu ignorieren. Volltreffer-Signale bleiben unveraendert die
+  Hauptquelle der Trades.
 """
 import time
+import random
 import requests
 
 from agents.model_router import ModelRouter
@@ -24,10 +21,11 @@ from agents.gemini_agent import GeminiCoreAgent
 from database.supabase import (
     send_chat_message, save_trade, close_trade,
     get_current_balance_and_winrate, log_thought, check_and_notify_milestone,
+    upsert_market_snapshot,
 )
 from market_data.collector import get_valid_assets, fetch_ohlcv_df
 from market_data.indicators import rsi_wilder
-from strategies.trend import confluence_signal
+from strategies.trend import confluence_signal, DECISION_THRESHOLD
 from memory.experience_memory import log_trade_features
 from training.trainer import retrain_model_from_history, load_model_coefficients, predict_win_probability
 from config.settings import SUPABASE_URL, HEADERS, MAX_TOTAL_BUDGET_USD, FIXED_LEVERAGE
@@ -38,9 +36,15 @@ MONITORED_ASSETS_RAW = [
     "LINK-USD", "SUI-USD", "NIL-USD", "TAO-USD", "NIGHT-USD",
 ]
 
-ENTRY_COOLDOWN_SECONDS = 20     # nicht bei jedem 1-Sekunden-Tick pro Symbol neu einsteigen
+SNAPSHOT_TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
+ENTRY_COOLDOWN_SECONDS = 20
 RETRAIN_INTERVAL_SECONDS = 6 * 3600
 EXIT_RSI_LOW, EXIT_RSI_HIGH = 20, 80
+
+# --- Explorations-Parameter (nur Paper-Trading, deshalb bewusst grosszuegig) ---
+EXPLORATION_RATE = 0.25          # Chance, ein zu schwaches Signal trotzdem als Mini-Trade zu nehmen
+EXPLORATION_MIN_SCORE = 1.0      # ab diesem rohen Score gilt ein HOLD als "leaning", nicht als neutral
+EXPLORATION_MARGIN_FACTOR = 0.4  # Explorations-Trades bekommen weniger Kapital als volle Signale
 
 
 def get_open_position(symbol):
@@ -55,7 +59,7 @@ def get_open_position(symbol):
 
 
 def main_loop():
-    print("🚀 KIAgent 24/7 - regelbasierte Analyse + Lernschleife gestartet.", flush=True)
+    print("🚀 KIAgent 24/7 - regelbasierte Analyse + Lernschleife + Explorations-Modus gestartet.", flush=True)
 
     valid_assets = get_valid_assets(MONITORED_ASSETS_RAW)
     print(f"✅ {len(valid_assets)}/{len(MONITORED_ASSETS_RAW)} Assets bei Kraken bestaetigt: {valid_assets}", flush=True)
@@ -76,16 +80,23 @@ def main_loop():
             risk_pct = max(0.005, min(0.03, kelly * 0.05))
 
             for symbol in valid_assets:
-                df_15m = fetch_ohlcv_df(symbol, "15m", 100)
-                df_1h = fetch_ohlcv_df(symbol, "1h", 100)
-                if df_15m.empty or df_1h.empty:
+                # --- Alle Zeitfenster holen (fuer das Profi-Dashboard, unabhaengig von der Entscheidung) ---
+                dfs = {tf: fetch_ohlcv_df(symbol, tf, 100) for tf in SNAPSHOT_TIMEFRAMES}
+                if dfs["15m"].empty or dfs["1h"].empty:
                     continue
 
-                last_price = float(df_15m["close"].iloc[-1])
-                position = get_open_position(symbol)
+                rsi_by_tf = {
+                    tf: (round(float(rsi_wilder(dfs[tf]["close"]).iloc[-1]), 2) if not dfs[tf].empty and len(dfs[tf]) > 15 else None)
+                    for tf in SNAPSHOT_TIMEFRAMES
+                }
+                last_price = float(dfs["15m"]["close"].iloc[-1])
 
-                signal = confluence_signal(df_1h, df_15m)
+                signal = confluence_signal(dfs["1h"], dfs["15m"])
+                upsert_market_snapshot(symbol, last_price, signal["direction"], signal["confidence"],
+                                        signal["reasons"], rsi_by_tf)
                 log_thought(symbol, signal["direction"], signal["confidence"], signal["reasons"])
+
+                position = get_open_position(symbol)
 
                 # --- Offene Position: nur pruefen, ob Exit-Bedingung erreicht ist ---
                 if position:
@@ -111,31 +122,54 @@ def main_loop():
                 if time.time() - last_entry_call.get(symbol, 0) < ENTRY_COOLDOWN_SECONDS:
                     continue
 
-                if signal["direction"] not in ("BUY", "SELL") or signal["confidence"] < 0.5:
+                is_exploration = False
+                trade_direction = signal["direction"]
+                trade_confidence = signal["confidence"]
+
+                if trade_direction == "HOLD":
+                    # Explorations-Chance: schwaches, aber vorhandenes Signal bewusst als Mini-Trade nehmen,
+                    # damit ueberhaupt genug Trainingsdaten fuer die Lernschleife zusammenkommen.
+                    score = signal["score"]
+                    if abs(score) >= EXPLORATION_MIN_SCORE and random.random() < EXPLORATION_RATE:
+                        trade_direction = "BUY" if score > 0 else "SELL"
+                        trade_confidence = min(abs(score) / DECISION_THRESHOLD, 1.0) * 0.5
+                        is_exploration = True
+
+                if trade_direction not in ("BUY", "SELL"):
                     continue
 
                 last_entry_call[symbol] = time.time()
 
                 win_prob = predict_win_probability(model_coeffs, [
-                    signal["rsi_1h"], signal["rsi_15m"], signal["confidence"], signal["confidence"],
+                    signal["rsi_1h"], signal["rsi_15m"], trade_confidence, trade_confidence,
                 ])
-                if model_coeffs and win_prob < 0.55:
-                    log_thought(symbol, "HOLD", signal["confidence"],
+                # Das trainierte Modell darf normale Signale filtern, aber Explorations-Trades
+                # bewusst NICHT blockieren - sonst sammelt der Bot nie neue, abweichende Daten.
+                if model_coeffs and not is_exploration and win_prob < 0.55:
+                    log_thought(symbol, "HOLD", trade_confidence,
                                 signal["reasons"] + [f"vom Modell abgelehnt (P={win_prob:.2f})"])
                     continue
 
+                reasons_for_trade = list(signal["reasons"])
+                if is_exploration:
+                    reasons_for_trade.append("Exploration: bewusst getradet, um Trainingsdaten zu sammeln")
+
                 comment, _ = router.route(
-                    f"{symbol}: Regelbasiertes Signal {signal['direction']} "
-                    f"(Gruende: {signal['reasons']}). Kurze Begruendung in 1 Satz.",
+                    f"{symbol}: Signal {trade_direction} (Gruende: {reasons_for_trade}). "
+                    f"Kurze Begruendung in 1 Satz.",
                     system_context="Du bist Chef-Analyst. Antworte in 1 kurzem Satz.",
                     preferred_model="gemini",
                 )
 
                 margin = balance * risk_pct
+                if is_exploration:
+                    margin *= EXPLORATION_MARGIN_FACTOR
+
                 save_trade(
-                    symbol, signal["direction"], last_price, 0, 0, comment,
+                    symbol, trade_direction, last_price, 0, 0, comment,
                     f"15m:{signal['rsi_15m']:.1f}, 1h:{signal['rsi_1h']:.1f}",
-                    "Konfluenz", margin, FIXED_LEVERAGE, "ACTIVE", last_price * 1.005,
+                    "Exploration" if is_exploration else "Konfluenz",
+                    margin, FIXED_LEVERAGE, "ACTIVE", last_price * 1.005,
                 )
 
                 new_trade = requests.get(
@@ -146,15 +180,15 @@ def main_loop():
                 if isinstance(new_trade, list) and new_trade:
                     log_trade_features(
                         new_trade[0]["id"], signal["rsi_1h"], signal["rsi_15m"],
-                        signal["confidence"], signal["confidence"],
+                        trade_confidence, trade_confidence,
                     )
 
-            # --- Live-Chat verarbeiten (vorher nie aufgerufen!) ---
+            # --- Live-Chat verarbeiten ---
             new_id = agent.process_live_chat(last_chat_id)
             if new_id:
                 last_chat_id = new_id
 
-            # --- Periodisches Nachtraining, ohne zusaetzlichen Render-Cron-Job ---
+            # --- Periodisches Nachtraining ---
             if time.time() - last_retrain > RETRAIN_INTERVAL_SECONDS:
                 new_coeffs = retrain_model_from_history()
                 if new_coeffs:
