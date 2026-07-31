@@ -66,6 +66,34 @@ def get_current_balance_and_winrate(base_balance=100.0, lookback=200):
         print(f"❌ Balance/Winrate-Fehler: {e}"); return base_balance, 0.5, 0
 
 
+def upsert_market_snapshot(symbol, last_price, direction, confidence, reasons, rsi_by_tf):
+    """Schreibt/ueberschreibt die aktuelle Einschaetzung fuer EIN Asset (eine Zeile pro Symbol,
+    kein wachsendes Log). Das ist die schnelle Datenquelle fuer die Live-Tabelle im Dashboard,
+    damit das Dashboard selbst keine eigenen Kraken-Anfragen mehr braucht."""
+    try:
+        reasons_text = ", ".join(reasons) if isinstance(reasons, list) else str(reasons)
+        payload = {
+            "symbol": symbol, "last_price": last_price, "direction": direction,
+            "confidence": confidence, "reasons": reasons_text,
+            "rsi_5m": rsi_by_tf.get("5m"), "rsi_15m": rsi_by_tf.get("15m"),
+            "rsi_1h": rsi_by_tf.get("1h"), "rsi_4h": rsi_by_tf.get("4h"), "rsi_1d": rsi_by_tf.get("1d"),
+            "updated_at": "now()",
+        }
+        headers_upsert = dict(HEADERS)
+        headers_upsert["Prefer"] = "resolution=merge-duplicates"
+        requests.post(f"{SUPABASE_URL}/rest/v1/market_snapshot?on_conflict=symbol", headers=headers_upsert, json=payload)
+    except Exception as e:
+        print(f"⚠️ Snapshot-Update fehlgeschlagen ({symbol}): {e}")
+
+
+def get_market_snapshot():
+    try:
+        resp = requests.get(f"{SUPABASE_URL}/rest/v1/market_snapshot?select=*&order=symbol.asc", headers=HEADERS).json()
+        return resp if isinstance(resp, list) else []
+    except Exception as e:
+        print(f"❌ Snapshot laden fehlgeschlagen: {e}"); return []
+
+
 def get_bot_thoughts(limit=25):
     try:
         resp = requests.get(
