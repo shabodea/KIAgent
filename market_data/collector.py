@@ -28,7 +28,7 @@ def get_exchange():
     """Eine einzige, wiederverwendete Exchange-Instanz mit aktivem Rate-Limiter."""
     global _exchange
     if _exchange is None:
-        _exchange = ccxt.kraken({"enableRateLimit": True})
+        _exchange = ccxt.kraken({"enableRateLimit": True, "timeout": 15000})
         _exchange.load_markets()
     return _exchange
 
