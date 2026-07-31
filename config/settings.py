@@ -1,9 +1,11 @@
-
 import os
 
 # --- DATENBANK (SUPABASE) KONFIGURATION ---
-SUPABASE_URL = "https://swyjycklcbcfhiafibar.supabase.co"
-SUPABASE_KEY = "sb_publishable_e4pYpgdnhEEsN3iEZ6rghQ_M7IGgrl4"
+# WICHTIG: Diese Werte kommen jetzt AUSSCHLIESSLICH aus Umgebungsvariablen.
+# Trage sie in Render (Environment) und in Streamlit Cloud (Secrets) ein.
+# Siehe .env.example fuer die genauen Variablennamen.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -12,12 +14,11 @@ HEADERS = {
 }
 
 # --- KRYPTO-BÖRSE (KRAKEN) PARAMETER ---
-MAX_TOTAL_BUDGET_USD = 200.0  # Maximales Gesamtkapital im Umlauf
-FIXED_LEVERAGE = 10           # Institutioneller Hebelfaktor
-BASE_TIMEFRAME = "15m"        # Analyse-Intervall für Indikatoren
+MAX_TOTAL_BUDGET_USD = 100.0   # Virtuelles Paper-Trading-Kapital
+FIXED_LEVERAGE = 10            # Institutioneller Hebelfaktor (nur Paper-Trading!)
+BASE_TIMEFRAME = "15m"         # Analyse-Intervall fuer Indikatoren
 
-# --- KI-Schnittstellen ---
-# Der Gemini API Key wird aus Sicherheitsgründen als Umgebungsvariable vom Server geladen
+# --- KI-Schnittstellen (alle als Umgebungsvariable, nie im Code) ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
