@@ -23,16 +23,20 @@ class RateLimiter:
 
 class ModelRouter:
     def __init__(self):
-        self.gemini_limiter = RateLimiter(55, 60) # Gemini 2.0 ist schnell
-        self.groq_limiter = RateLimiter(45, 60)
-        self.deepseek_limiter = RateLimiter(100, 60)
+        # WICHTIG: Diese Werte entsprechen jetzt den ECHTEN Gratis-Limits der Anbieter
+        # (Stand 2026). Die alten Werte (55/45/100 pro Minute) lagen weit ueber den
+        # tatsaechlichen kostenlosen Kontingenten und fuehrten dauerhaft zu 429-Fehlern,
+        # die dann im Code als Muenzwurf-Fallback endeten.
+        self.gemini_limiter = RateLimiter(10, 60)     # Gratis: ca. 10-15 Anfragen/Minute
+        self.groq_limiter = RateLimiter(28, 60)        # Gratis: 30 Anfragen/Minute, 1000/Tag (hartes Limit!)
+        self.deepseek_limiter = RateLimiter(15, 60)    # nur relevant, falls ein :free-Modell genutzt wird
         self.gemini_key = GEMINI_API_KEY
         self.groq_key = GROQ_API_KEY
         self.openrouter_key = OPENROUTER_API_KEY
 
     def call_gemini(self, prompt, system_context=""):
-        # WICHTIG: Modell auf gemini-2.0-flash umgestellt (verfügbar und schnell)
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={self.gemini_key.strip()}"
+        # gemini-2.5-flash-lite hat aktuell das grosszuegigste Gratis-Kontingent.
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key={self.gemini_key.strip()}"
         full_prompt = f"{system_context}\n\n{prompt}" if system_context else prompt
         try:
             resp = requests.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]}, timeout=10).json()
@@ -51,7 +55,7 @@ class ModelRouter:
         if system_context: messages.append({"role": "system", "content": system_context})
         messages.append({"role": "user", "content": prompt})
         try:
-            resp = requests.post(url, json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7}, timeout=10).json()
+            resp = requests.post(url, headers=headers, json={"model": "llama-3.3-70b-versatile", "messages": messages, "temperature": 0.7}, timeout=10).json()
             if "error" in resp:
                 return None, f"Groq Fehler: {resp['error']['message']}"
             return resp['choices'][0]['message']['content'], None
@@ -59,18 +63,21 @@ class ModelRouter:
             return None, str(e)
 
     def call_deepseek(self, prompt, system_context=""):
+        # HINWEIS: DeepSeek-Modelle sind auf OpenRouter seit Mitte 2026 nicht mehr kostenlos.
+        # Fuer eine wirklich kostenlose Variante hier ein aktuelles ":free"-Modell eintragen,
+        # z.B. "deepseek/deepseek-r1-distill:free" (Verfuegbarkeit vorher auf
+        # openrouter.ai/models pruefen - Gratis-Modelle rotieren ohne Vorankuendigung).
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.openrouter_key}", "Content-Type": "application/json"}
         messages = []
         if system_context: messages.append({"role": "system", "content": system_context})
         messages.append({"role": "user", "content": prompt})
-        # WICHTIG: max_tokens auf 500 setzen, um Kosten zu sparen und den Guthaben-Fehler zu vermeiden
         try:
-            resp = requests.post(url, json={
-                "model": "deepseek/deepseek-r1",
+            resp = requests.post(url, headers=headers, json={
+                "model": "deepseek/deepseek-r1-distill:free",
                 "messages": messages,
                 "temperature": 0.7,
-                "max_tokens": 500  # <-- Entscheidend!
+                "max_tokens": 500  # <-- Entscheidend fuer Kostenkontrolle
             }, timeout=10).json()
             if "error" in resp:
                 return None, f"DeepSeek Fehler: {resp['error']['message']}"
