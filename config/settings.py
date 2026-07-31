@@ -22,3 +22,18 @@ BASE_TIMEFRAME = "15m"         # Analyse-Intervall fuer Indikatoren
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+
+def _preview(value):
+    """Zeigt Laenge + Anfang/Ende eines Werts, OHNE ihn komplett preiszugeben.
+    Damit sieht man sofort Tippfehler, Anfuehrungszeichen oder Leerzeichen,
+    die beim Kopieren nach Render/Streamlit reingerutscht sind."""
+    if not value:
+        return "LEER / NICHT GESETZT"
+    v = str(value)
+    return f"Länge={len(v)}, Start='{v[:12]}...', Ende='...{v[-6:]}', erstes/letztes Zeichen={v[0]!r}/{v[-1]!r}"
+
+
+print("🔎 Zugangsdaten-Check beim Start (zur Fehlersuche, keine Geheimnisse werden komplett angezeigt):", flush=True)
+print(f"   SUPABASE_URL: {_preview(SUPABASE_URL)}", flush=True)
+print(f"   SUPABASE_KEY: {_preview(SUPABASE_KEY)}", flush=True)
