@@ -3,3 +3,4 @@ requests
 pandas
 ccxt
 numpy
+scikit-learn

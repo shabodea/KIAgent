@@ -39,14 +39,17 @@ Ein absolut autonomes KI-System zur Krypto-Marktanalyse, algorithmischen Strateg
 - **Daten-Pipeline:** CCXT-Anbindung an die Krypto-Börse **Kraken**.
 
 ## 3. Technische API-Verbindungsdaten
-Jeder Bot muss diese exakten Endpunkte und Schlüssel für HTTP-Requests (GET/POST) nutzen:
-- **Supabase URL:** `https://swyjycklcbcfhiafibar.supabase.co`
-- **Supabase Key:** `sb_publishable_e4pYpgdnhEEsN3iEZ6rghQ_M7IGgrl4`
-- **Headers für Requests:**
+WICHTIG: Supabase-URL und -Key stehen ab sofort NICHT MEHR im Klartext in diesem
+Repository. Sie werden ausschließlich als Umgebungsvariablen gesetzt:
+- In Render: Dashboard -> Environment -> `SUPABASE_URL`, `SUPABASE_KEY`
+- In Streamlit Cloud: App Settings -> Secrets -> `SUPABASE_URL`, `SUPABASE_KEY`
+Siehe `.env.example` im Projekt-Root für die exakten Variablennamen.
+Grund: Ein zuvor hier hinterlegter Klartext-Key wäre für jeden lesbar gewesen,
+der dieses (ggf. öffentliche) Repository einsieht.
   ```json
   {
-    "apikey": "sb_publishable_e4pYpgdnhEEsN3iEZ6rghQ_M7IGgrl4",
-    "Authorization": "Bearer sb_publishable_e4pYpgdnhEEsN3iEZ6rghQ_M7IGgrl4",
+    "apikey": "<aus Umgebungsvariable SUPABASE_KEY>",
+    "Authorization": "Bearer <aus Umgebungsvariable SUPABASE_KEY>",
     "Content-Type": "application/json"
   }
 # 📐 KI Trading Agent – Architektur & Systemdokumentation

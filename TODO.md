@@ -2,10 +2,17 @@
 
 *Hinweis für die KI: Dieses Dokument muss nach jeder erfolgreichen Sitzung aktualisiert werden.*
 
-## 🛑 Höchste Priorität (Fehlerbehebung)
-- [ ] `worker.py`: Beheben des Einrückungsproblems (`SyntaxError: 'return' outside function`) in der Funktion `get_live_kraken_markets`.
-- [ ] `streamlit_app.py`: Verifizieren, dass der `StreamlitDuplicateElementId`-Fehler nach der Dateibereinigung und dem Hard-Reboot dauerhaft gelöscht bleibt.
+## 🛑 Von dir manuell zu erledigen (kein Code-Fix moeglich, braucht deine Zugangsdaten)
+- [ ] `supabase_setup_v2.sql` einmalig im Supabase SQL-Editor ausfuehren.
+- [ ] `.env.example` als Vorlage nutzen: GEMINI_API_KEY, GROQ_API_KEY, SUPABASE_URL,
+      SUPABASE_KEY in Render (Environment) UND Streamlit Cloud (Secrets) eintragen.
+- [ ] Kostenlose API-Keys besorgen: aistudio.google.com (Gemini), console.groq.com (Groq).
+- [ ] Nach dem Push: Render-Logs beobachten, ob der Worker fehlerfrei startet.
 
-## ⚙️ Optimierung
-- [ ] Überprüfung, ob das System-Gedächtnis aus `public.system_knowledge` stabil von der App geladen wird.
-- [ ] Implementierung eines automatischen Re-Connects bei Supabase-Verbindungsabbrüchen.
+## ⚙️ Sinnvolle naechste Ausbaustufen
+- [ ] Backtesting-Modul (`backtesting/backtester.py`) bauen, um die Konfluenz-Strategie
+      auf historischen Daten zu pruefen, bevor man dem Paper-Trading-Ergebnis traut.
+- [ ] `Risiko_Log`-Tabelle tatsaechlich befuellen (wird aktuell nur gelesen, nie beschrieben)
+      + Tagesverlust-Notbremse einbauen.
+- [ ] Mehr Timeframes/Indikatoren in `strategies/trend.py` einbeziehen (aktuell RSI 1h/15m
+      + ein Kerzenmuster-Score), sobald genug Trainingsdaten vorhanden sind.

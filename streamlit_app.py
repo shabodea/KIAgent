@@ -1,9 +1,17 @@
+import os
 import streamlit as st
+
+# WICHTIG: Streamlit Cloud Secrets landen in st.secrets, NICHT automatisch in
+# os.environ. config/settings.py liest aber os.getenv(...) -> hier einmalig
+# bruecken, BEVOR irgendetwas aus database/config importiert wird.
+for _k, _v in st.secrets.items():
+    os.environ.setdefault(_k, str(_v))
+
 import pandas as pd
 from datetime import datetime
 import ccxt
 import numpy as np
-from database.supabase import get_all_data_live, send_chat_message
+from database.supabase import get_all_data_live, send_chat_message, get_bot_thoughts
 
 st.set_page_config(page_title="🦅 KI-Learning-Cockpit", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
@@ -135,6 +143,34 @@ with right_col:
                 if role == "system": st.markdown(f"<span style='color:#ffcc00;'>🧠 {content}</span>", unsafe_allow_html=True)
                 elif role == "user": st.markdown(f"<span style='color:#4da6ff;'>🧑‍💻 {content}</span>", unsafe_allow_html=True)
                 elif role == "assistant": st.markdown(f"<span style='color:#00ff66;'>🤖 {content}</span>", unsafe_allow_html=True)
+
+st.markdown("---")
+st.subheader("🧠 Live-Denkprotokoll (auch HOLD-Entscheidungen)")
+thoughts_resp = get_bot_thoughts(limit=25)
+if isinstance(thoughts_resp, list) and thoughts_resp:
+    for t in thoughts_resp:
+        color = "#00ff66" if t.get("direction") == "BUY" else ("#ff4d4d" if t.get("direction") == "SELL" else "#ffcc00")
+        st.markdown(
+            f"<span style='color:{color};'>**{t.get('symbol')}** → {t.get('direction')} "
+            f"(Konfidenz {float(t.get('confidence') or 0):.2f})</span> – {t.get('reasons','')}",
+            unsafe_allow_html=True,
+        )
+else:
+    st.info("Noch keine Eintraege im Denkprotokoll (Tabelle bot_thoughts pruefen).")
+
+st.subheader("📈 Trefferquote-Verlauf")
+closed_sorted = [t for t in trades if isinstance(t, dict) and t.get("Status") == "CLOSED"]
+closed_sorted.sort(key=lambda x: x.get("id", 0))
+if closed_sorted:
+    rolling = []
+    wins_running = 0
+    for i, t in enumerate(closed_sorted, start=1):
+        if float(t.get("net_pnl") or 0.0) > 0:
+            wins_running += 1
+        rolling.append(wins_running / i)
+    st.line_chart(rolling)
+else:
+    st.info("Noch keine geschlossenen Trades fuer den Trefferquote-Verlauf.")
 
 st.markdown("---")
 prompt = st.chat_input("Befehl an den Broker...", key="broker_input")
