@@ -2,15 +2,16 @@
 KIAgent Worker - 24/7 Hintergrund-Triebwerk (laeuft auf Render).
 
 Neu in dieser Version:
-- Holt jetzt 5 Zeitfenster (5m/15m/1h/4h/1d) pro Asset und schreibt daraus
-  einen IMMER AKTUELLEN Snapshot (market_snapshot) fuer das Profi-Dashboard -
-  das Dashboard selbst braucht dadurch keine eigenen Kraken-Anfragen mehr.
-- Explorations-Modus: Da es reines Paper-Trading ist (kein echtes Kapital-
-  risiko) und der Bot moeglichst schnell Trainingsdaten sammeln soll, nimmt
-  er einen Teil der Grenzfaelle (klares Signal, aber unter der normalen
-  Schwelle) bewusst als kleinere "Explorations-Trades" mit, statt sie
-  komplett zu ignorieren. Volltreffer-Signale bleiben unveraendert die
-  Hauptquelle der Trades.
+- JEDE Netzwerk-Anfrage hat jetzt ein Zeitlimit (Timeout). Vorher konnte eine
+  einzige haengende Verbindung (Kraken oder Supabase) den kompletten Worker
+  fuer immer blockieren, komplett ohne Fehlermeldung - das sah im Render-Log
+  wie ein "Stillstand ohne Grund" aus.
+- Sichtbare Fortschritts-Ausgabe pro Analyse-Runde, damit im Log erkennbar
+  ist, dass der Bot aktiv arbeitet (statt Stille = Unsicherheit, ob er haengt).
+- 5 Zeitfenster (5m/15m/1h/4h/1d) pro Asset -> immer aktueller Snapshot
+  (market_snapshot) fuer das Profi-Dashboard.
+- Explorations-Modus: nimmt bewusst auch schwaechere Signale als kleinere
+  Trades mit, um schneller Trainingsdaten zu sammeln (reines Paper-Trading).
 """
 import time
 import random
@@ -29,6 +30,8 @@ from strategies.trend import confluence_signal, DECISION_THRESHOLD
 from memory.experience_memory import log_trade_features
 from training.trainer import retrain_model_from_history, load_model_coefficients, predict_win_probability
 from config.settings import SUPABASE_URL, HEADERS, MAX_TOTAL_BUDGET_USD, FIXED_LEVERAGE
+
+REQUEST_TIMEOUT = 15
 
 MONITORED_ASSETS_RAW = [
     "BTC-USD", "XRP-USD", "SOL-USD", "ETH-USD", "DOGE-USD", "ZEC-USD", "TRX-USD",
@@ -51,7 +54,7 @@ def get_open_position(symbol):
     trades = requests.get(
         f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id,Eintrittspreis,Richtung"
         f"&Vermögenswert=eq.{symbol}&Status=eq.ACTIVE",
-        headers=HEADERS,
+        headers=HEADERS, timeout=REQUEST_TIMEOUT,
     ).json()
     if isinstance(trades, list) and trades:
         return trades[0]
@@ -70,8 +73,14 @@ def main_loop():
     last_retrain = 0.0
     last_entry_call = {a: 0.0 for a in valid_assets}
     model_coeffs = load_model_coefficients()
+    print(f"ℹ️ Gelerntes Modell beim Start: {'vorhanden' if model_coeffs else 'noch keins (folgt nach 30+ Trades)'}", flush=True)
+
+    round_number = 0
 
     while True:
+        round_number += 1
+        round_start = time.time()
+        trades_this_round = 0
         try:
             balance, winrate, total_closed = get_current_balance_and_winrate(base_balance=MAX_TOTAL_BUDGET_USD)
             check_and_notify_milestone(total_closed, winrate)
@@ -79,10 +88,13 @@ def main_loop():
             kelly = max(0.0, (2 * winrate) - 1)
             risk_pct = max(0.005, min(0.03, kelly * 0.05))
 
-            for symbol in valid_assets:
+            print(f"🔄 Runde {round_number} gestartet (Depot ${balance:.2f}, Trefferquote {winrate*100:.1f}%, {total_closed} Trades bisher)", flush=True)
+
+            for i, symbol in enumerate(valid_assets, start=1):
                 # --- Alle Zeitfenster holen (fuer das Profi-Dashboard, unabhaengig von der Entscheidung) ---
                 dfs = {tf: fetch_ohlcv_df(symbol, tf, 100) for tf in SNAPSHOT_TIMEFRAMES}
                 if dfs["15m"].empty or dfs["1h"].empty:
+                    print(f"  [{i}/{len(valid_assets)}] {symbol}: keine Kursdaten erhalten, übersprungen", flush=True)
                     continue
 
                 rsi_by_tf = {
@@ -109,6 +121,7 @@ def main_loop():
                         if direction == "SELL":
                             pnl *= -1
                         close_trade(symbol, last_price, pnl)
+                        print(f"  [{i}/{len(valid_assets)}] {symbol}: Position geschlossen, PnL ${pnl:.2f}", flush=True)
 
                         lesson_prompt = (
                             f"Trade {symbol} {'GEWINN' if pnl > 0 else 'VERLUST'} ${pnl:.2f}. "
@@ -127,8 +140,6 @@ def main_loop():
                 trade_confidence = signal["confidence"]
 
                 if trade_direction == "HOLD":
-                    # Explorations-Chance: schwaches, aber vorhandenes Signal bewusst als Mini-Trade nehmen,
-                    # damit ueberhaupt genug Trainingsdaten fuer die Lernschleife zusammenkommen.
                     score = signal["score"]
                     if abs(score) >= EXPLORATION_MIN_SCORE and random.random() < EXPLORATION_RATE:
                         trade_direction = "BUY" if score > 0 else "SELL"
@@ -143,8 +154,6 @@ def main_loop():
                 win_prob = predict_win_probability(model_coeffs, [
                     signal["rsi_1h"], signal["rsi_15m"], trade_confidence, trade_confidence,
                 ])
-                # Das trainierte Modell darf normale Signale filtern, aber Explorations-Trades
-                # bewusst NICHT blockieren - sonst sammelt der Bot nie neue, abweichende Daten.
                 if model_coeffs and not is_exploration and win_prob < 0.55:
                     log_thought(symbol, "HOLD", trade_confidence,
                                 signal["reasons"] + [f"vom Modell abgelehnt (P={win_prob:.2f})"])
@@ -171,11 +180,14 @@ def main_loop():
                     "Exploration" if is_exploration else "Konfluenz",
                     margin, FIXED_LEVERAGE, "ACTIVE", last_price * 1.005,
                 )
+                trades_this_round += 1
+                print(f"  [{i}/{len(valid_assets)}] {symbol}: NEUER TRADE {trade_direction}"
+                      f"{' (Exploration)' if is_exploration else ''} @ ${last_price:.4f}", flush=True)
 
                 new_trade = requests.get(
                     f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id&Vermögenswert=eq.{symbol}"
                     f"&Status=eq.ACTIVE&order=id.desc&limit=1",
-                    headers=HEADERS,
+                    headers=HEADERS, timeout=REQUEST_TIMEOUT,
                 ).json()
                 if isinstance(new_trade, list) and new_trade:
                     log_trade_features(
@@ -194,6 +206,9 @@ def main_loop():
                 if new_coeffs:
                     model_coeffs = new_coeffs
                 last_retrain = time.time()
+
+            elapsed = time.time() - round_start
+            print(f"✅ Runde {round_number} fertig in {elapsed:.0f}s, {trades_this_round} neue Trades.", flush=True)
 
             time.sleep(20)
 
