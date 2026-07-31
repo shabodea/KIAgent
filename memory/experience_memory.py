@@ -1,12 +1,12 @@
-
 """
 Speichert bei jedem Trade die Feature-Werte (RSI/Muster/Konfidenz),
 damit training/trainer.py daraus spaeter lernen kann, welche
 Konstellationen tatsaechlich zu Gewinnen fuehren.
-Vorher: komplett leer, nichts wurde je gespeichert -> keine echte Lernschleife moeglich.
 """
 import requests
 from config.settings import SUPABASE_URL, HEADERS
+
+TIMEOUT = 15  # verhindert, dass eine haengende Verbindung den Worker fuer immer blockiert
 
 
 def log_trade_features(trade_id, rsi_1h, rsi_15m, pattern_score, confidence):
@@ -17,7 +17,7 @@ def log_trade_features(trade_id, rsi_1h, rsi_15m, pattern_score, confidence):
             "rsi_15m": float(rsi_15m),
             "pattern_score": float(pattern_score),
             "confidence": float(confidence),
-        })
+        }, timeout=TIMEOUT)
     except Exception as e:
         print(f"⚠️ Feature-Log fehlgeschlagen: {e}")
 
@@ -27,11 +27,11 @@ def load_training_set(limit=500):
     try:
         trades = requests.get(
             f"{SUPABASE_URL}/rest/v1/Handelsgeschichte?select=id,net_pnl&Status=eq.CLOSED&order=id.desc&limit={limit}",
-            headers=HEADERS,
+            headers=HEADERS, timeout=TIMEOUT,
         ).json()
         features = requests.get(
             f"{SUPABASE_URL}/rest/v1/trade_features?select=*&order=id.desc&limit={limit}",
-            headers=HEADERS,
+            headers=HEADERS, timeout=TIMEOUT,
         ).json()
         if not isinstance(trades, list) or not isinstance(features, list):
             return []
