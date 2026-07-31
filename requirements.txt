@@ -2,8 +2,4 @@ streamlit
 requests
 pandas
 ccxt
-openai
-requests
-groq
 numpy
-yfinance
